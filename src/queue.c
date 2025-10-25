@@ -1,5 +1,15 @@
 // src/queue.c
 
+// ---------------------------------------------------------------------------
+// Implements the queue API using a doubly-ended linked list.
+// Enqueue: Lock, add to tail, signal cond, unlock.
+// Dequeue: Lock, wait on cond if empty (releases lock), pop head, unlock.
+// Error Handling: Malloc fails return -1; no full-queue limit (grow as needed).
+// Memory: Nodes freed on dequeue; full destroy frees all.
+// Compile Note: Links with -lpthread for mutex/cond.
+// ---------------------------------------------------------------------------
+
+
 #include "queue.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -67,7 +77,7 @@ int queue_dequeue(queue_t *q, task_t *task)
     pthread_mutex_lock(&q->lock);
     while (q->size == 0)
     { // Busy wait? No block on cond
-        pthread_cond_wait(&q->cond, &q->lock);
+        pthread_cond_wait(&q->cond, &q->lock); // automatically unlock + wait 
     }
     node_t *front = q->head;
     if (!front)
@@ -75,12 +85,12 @@ int queue_dequeue(queue_t *q, task_t *task)
         pthread_mutex_unlock(&q->lock);
         return -1;
     }
-    *task = front->task;
+    *task = front->task; // copy payload
     q->head = front->next;
     if (!q->head)
-        q->tail = NULL;
+        q->tail = NULL; // last item phew phew
     q->size--;
     pthread_mutex_unlock(&q->lock);
-    free(front);
+    free(front); // clean node
     return 0;
 }
