@@ -11,11 +11,13 @@
 #define WORKER_H
 
 #include "queue.h"
+#include "metadata.h"
 #include <pthread.h>
 
 typedef struct{
     queue_t* task_queue;
     int id; // Worrker #1,#2, .....
+    metadata_t* metadata; //added metadata 
 
 } workers_args_t;
 

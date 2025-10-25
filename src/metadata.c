@@ -1,4 +1,4 @@
-// rc/metadata.c
+// src/metadata.c
 
 #include "metadata.h"
 #include <stdio.h> //snprintf
