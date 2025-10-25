@@ -1,5 +1,11 @@
 // src/worker.c
 
+// ---------------------------------------------------------------------------
+// Each worker thread runs worker_func: Blocks on dequeue, executes task
+// based on cmd_t, prints stubs (real I/O later). Infinite loop with flag check.(rn no flg check)
+// ---------------------------------------------------------------------------
+
+
 #include "worker.h"
 #include <stdio.h>
 #include <string.h>

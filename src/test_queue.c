@@ -1,5 +1,10 @@
 // src/test_queue.c
 
+// -------------------------------------------------------------------------
+// Standalone main to test queue + worker pool: Init, spawn workers, enqueue
+// dummies, shutdown gracefully, cleanup. Proves no races/leaks solo. 
+// -------------------------------------------------------------------------
+
 #include "queue.h"
 #include "worker.h"
 #include <stdio.h>

@@ -1,4 +1,9 @@
 // src/task.h 
+
+// ---------------------------------------------------------------------------
+// This header define the task_t struct used to package client commands, It contains cmd, username, filename, file_size, and a socket. Workers deque it and execute the cmd_t enum. 
+// ---------------------------------------------------------------------------
+
 #ifndef TASK_H 
 #define TASK_H
 
