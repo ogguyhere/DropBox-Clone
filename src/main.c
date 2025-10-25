@@ -1,14 +1,11 @@
-
 /*
 this is ---main accept loop---
 
 --> creates a single main thread that listens to tcp connections
 --> when client connects:
         - accept connection
-        - push socket discriptor in client queue
-
+        - push socket descriptor in client queue
 */
-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,24 +13,33 @@ this is ---main accept loop---
 #include <unistd.h>
 #include <arpa/inet.h>         // internet sockets
 #include <pthread.h>
-
+#include "client_threadpool.h" 
 
 
 // ******************* Member B 
-// What It Does: This is a dummy function that takes a socket descriptor (sockfd) and prints a message. It simulates pushing the socket into the Client Queue, which Member B will implement with thread-safe logic (e.g., using mutexes).
-void enqueue_socket(int sockfd) {
-    printf("Placeholder: Enqueuing socket %d\n", sockfd);
-    // Simulate pushing the socket to the Client Queue
-    // Member B will replace this with actual queue logic
-}
+// What It Does: This is a dummy function that takes a socket descriptor (sockfd) and prints a message.
+// It simulates pushing the socket into the Client Queue, which Member B will implement with thread-safe logic (e.g., using mutexes).
 
+void enqueue_socket(int sockfd) {
+    pthread_mutex_lock(&queue_mutex); // Use the mutex from client_threadpool.c
+    if (queue_size < THREAD_POOL_SIZE) { // Limit to queue size
+        socket_queue[queue_size] = sockfd;
+        queue_size++;
+        printf("Socket %d enqueued to threadpool (queue size: %d)\n", sockfd, queue_size);
+    } else {
+        printf("***** Queue full, dropping socket %d\n", sockfd);
+        close(sockfd);
+    }
+    pthread_mutex_unlock(&queue_mutex);
+    pthread_cond_signal(&queue_cond); // Wake up waiting threads
+}
 
 void* accept_connections(void* arg) {
     int server_fd, client_fd;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
-    // Create  socket
+    // Create socket
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -76,6 +82,7 @@ void* accept_connections(void* arg) {
 
 int main() {
     pthread_t accept_thread;
+    init_client_threadpool();
 
     // Create a thread to run the accept loop
     if (pthread_create(&accept_thread, NULL, accept_connections, NULL) != 0) {
@@ -86,6 +93,9 @@ int main() {
 
     // Wait for the thread  
     // ************** add MULTI THREADING in next phase
-    pthread_join(accept_thread, NULL);
+    // pthread_join(accept_thread, NULL);
+    pause();
+    cleanup_client_threadpool();  
+
     return 0;
 }
