@@ -8,6 +8,7 @@
 #include "queue.h"
 #include "worker.h"
 #include "metadata.h"
+#include "file_io.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -34,6 +35,18 @@ int main()
         // Cleanup...
     }
 
+    // Pre-create disk file for alice
+    create_user_dir("alice");
+    FILE *f = fopen("./storage/alice/test_file.txt", "w");
+    if (f)
+    {
+        fwrite("dummy content", 1, 13, f); // 13 bytes
+        fclose(f);
+        printf("Pre-created test_file.txt on disk (13 bytes)\n");
+        // Update metadata to match
+        metadata_add_file(meta, "alice", "test_file.txt", 13);
+    }
+
     // Pre-add file for alice (to test DELETE/LIST)
     metadata_add_file(meta, "alice", "file1.txt", 500);
 
@@ -43,7 +56,7 @@ int main()
     for (int i = 0; i < 3; i++)
     {
         wargs[i].task_queue = task_q;
-        wargs[i].metadata = meta; 
+        wargs[i].metadata = meta;
         wargs[i].id = i + 1;
         if (pthread_create(&workers[i], NULL, worker_func, &wargs[i]) != 0)
         {
@@ -60,13 +73,21 @@ int main()
     //     {DELETE, "alice", "file2.txt", 0, -1},
     //     {LIST, "bob", "", 0, -1}};
 
-    task_t tasks[] = {
-        {DELETE, "alice", "file1.txt", 0, -1},
-        {LIST, "bob", "", 0, -1},
-        {UPLOAD, "alice", "photo.jpg", 2000000, -1}, // Big: >1MB, should fail quota
-        {DELETE, "alice", "file2.txt", 0, -1},       // This should ERROR (not exist)
-        {LIST, "bob", "", 0, -1}};
+    // task_t tasks[] = {
+    //     {DELETE, "alice", "file1.txt", 0, -1},
+    //     {LIST, "bob", "", 0, -1},
+    //     {UPLOAD, "alice", "photo.jpg", 2000000, -1}, // Big: >1MB, should fail quota
+    //     {DELETE, "alice", "file2.txt", 0, -1},       // This should ERROR (not exist)
+    //     {LIST, "bob", "", 0, -1}};
 
+    task_t tasks[] = {
+        {LIST, "alice", "", 0, -1},                  // Should show test_file.txt 13
+        {DELETE, "alice", "test_file.txt", 0, -1},   // Success
+        {LIST, "alice", "", 0, -1},                  // No files
+        {UPLOAD, "bob", "bigfile.dat", 2000000, -1}, // Quota fail
+        {DOWNLOAD, "alice", "test_file.txt", 0, -1}  // Error (deleted)
+    };
+    
     for (int i = 0; i < 5; i++)
     {
         if (queue_enqueue(task_q, tasks[i]) != 0)

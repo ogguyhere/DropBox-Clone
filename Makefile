@@ -16,7 +16,7 @@ $(CLIENT): $(SRC_DIR)/client.c
 	$(CC) $(CFLAGS) -o $(CLIENT) $(SRC_DIR)/client.c
 
 $(TEST): $(SRC_DIR)/test_queue.c $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c
-	$(CC) $(CFLAGS) -o $(TEST) $(SRC_DIR)/test_queue.c $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c $(SRC_DIR)/metadata.c -lpthread
+	$(CC) $(CFLAGS) -o $(TEST) $(SRC_DIR)/test_queue.c $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c $(SRC_DIR)/metadata.c $(SRC_DIR)/file_io.c -lpthread
 
 clean:
 	rm -f $(TARGET) $(CLIENT) $(TEST)
