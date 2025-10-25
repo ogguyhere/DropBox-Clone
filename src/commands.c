@@ -210,6 +210,46 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session) {
 }
 
 
+static void handle_download(int sockfd, char *filename, ClientSession *session) {
+    if (!session->authenticated) {
+        send_response(sockfd, "*** Error: Please login first\n");
+        return;
+    }
+
+    if (!filename) {
+        send_response(sockfd, "*** Invalid format. Usage: DOWNLOAD <filename>\n");
+        return;
+    }
+
+    // Construct full path
+    char filepath[300];
+    snprintf(filepath, sizeof(filepath), "uploads/%s", filename);
+
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        send_response(sockfd, "*** Error: File not found on server\n");
+        return;
+    }
+
+    // Read file in chunks
+    unsigned char file_buf[4096];
+    char encoded_buf[8192]; // Base64 output buffer
+    size_t bytes_read;
+
+    while ((bytes_read = fread(file_buf, 1, sizeof(file_buf), f)) > 0) {
+        int encoded_len = base64_encode(file_buf, bytes_read, encoded_buf, sizeof(encoded_buf));
+        if (encoded_len <= 0) {
+            send_response(sockfd, "*** Error: Failed to encode file\n");
+            fclose(f);
+            return;
+        }
+        write(sockfd, encoded_buf, encoded_len);
+    }
+
+    fclose(f);
+}
+
+
 void handle_commands(int sockfd, const char *buffer, ClientSession *session) {
     char command[10], arg1[50], arg2[50];
     int args = sscanf(buffer, "%9s %49s %49s", command, arg1, arg2);
@@ -228,7 +268,7 @@ void handle_commands(int sockfd, const char *buffer, ClientSession *session) {
     } else if (strcmp(command, "UPLOAD") == 0) {
         handle_upload(sockfd, args >= 2 ? arg1 : NULL, session);
     } else if (strcmp(command, "DOWNLOAD") == 0) {
-        send_response(sockfd, "*** Download not implemented yet\n");
+        handle_download(sockfd, args >= 2 ? arg1 : NULL, session);
     } else {
         send_response(sockfd, "*** Unknown command\n");
     }

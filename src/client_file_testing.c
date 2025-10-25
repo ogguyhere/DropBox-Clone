@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
+
 
 // ====== Config ======
 #define SERVER_IP "127.0.0.1"
@@ -53,6 +55,28 @@ char *encode_base64_file(const char *filename) {
     free(buffer);
     return encoded;
 }
+int base64_decode(const char *in, unsigned char *out, int out_size) {
+    static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int decode_table[256];
+    memset(decode_table, -1, sizeof(decode_table));
+    for (int i = 0; i < 64; i++)
+        decode_table[(unsigned char)b64_table[i]] = i;
+
+    int val = 0, valb = -8, out_len = 0;
+    for (int i = 0; in[i]; i++) {
+        unsigned char c = in[i];
+        if (decode_table[c] == -1) continue;
+        val = (val << 6) + decode_table[c];
+        valb += 6;
+        if (valb >= 0) {
+            if (out_len >= out_size) break;
+            out[out_len++] = (val >> valb) & 0xFF;
+            valb -= 8;
+        }
+    }
+    return out_len;
+}
+
 
 // ====== Networking Helpers ======
 int connect_to_server() {
@@ -114,6 +138,47 @@ void upload_file(int sock, const char *filename) {
     read_response(sock); // expect UPLOAD_SUCCESS
 }
 
+void download_file(int sock, const char *filename) {
+    // Make downloads folder if missing
+    mkdir("downloads", 0755);
+
+    // Send correct DOWNLOAD command
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "DOWNLOAD %s", filename);
+    send_command(sock, cmd);
+
+    // Receive Base64 stream from server
+    char enc_buf[65536]; // assume file <64KB for simplicity
+    int total = 0;
+    int n;
+
+    while ((n = recv(sock, enc_buf + total, sizeof(enc_buf) - 1 - total, 0)) > 0) {
+        total += n;
+        if (n < sizeof(enc_buf)/2) break; // simple heuristic for EOF
+    }
+    enc_buf[total] = '\0';
+
+    // Decode entire Base64 at once
+    unsigned char dec_buf[49152]; // 3/4 of encoded buffer
+    int dec_len = base64_decode(enc_buf, dec_buf, sizeof(dec_buf));
+    if (dec_len <= 0) {
+        fprintf(stderr, "Failed to decode Base64\n");
+        return;
+    }
+
+    // Write to downloads folder
+    char out_path[512];
+    snprintf(out_path, sizeof(out_path), "downloads/%s", filename);
+    FILE *out = fopen(out_path, "wb");
+    if (!out) { perror("fopen"); return; }
+    fwrite(dec_buf, 1, dec_len, out);
+    fclose(out);
+
+    printf("Downloaded: %s\n", out_path);
+}
+
+
+
 // ====== Main ======
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -123,16 +188,13 @@ int main(int argc, char *argv[]) {
 
     int sock = connect_to_server();
 
-    // Optional: send login command here if server requires auth
-
     send_command(sock, "signup test1 pass");
     read_response(sock);
-
-    // send_command(sock, "login test2 pass");
-    // read_response(sock);
-
+ 
 
     upload_file(sock, argv[1]);
+
+    download_file(sock, argv[1]);
     close(sock);
 
     return 0;

@@ -3,3 +3,4 @@ src/*.o
 obj/* 
 .vscode
 uploads/*.*
+downloads/*.*
