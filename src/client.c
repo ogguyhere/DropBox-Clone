@@ -10,7 +10,7 @@ int main() {
     char buffer[1024] = {0};
 
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("\n Socket creation error \n");
+        printf("\nSocket creation error\n");
         return -1;
     }
 
@@ -18,35 +18,58 @@ int main() {
     serv_addr.sin_port = htons(8080);
 
     if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr)<=0) {
-        printf("\nInvalid address/ Address not supported \n");
+        printf("\nInvalid address/Address not supported\n");
         return -1;
     }
 
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        printf("\nConnection Failed \n");
+        printf("\nConnection Failed\n");
         return -1;
     }
     printf("Connected to server on port 8080\n");
+    printf("==========================================\n\n");
 
+    // *** Comprehensive test with logout ***
     char *commands[] = {
-        "signup user1 pass1\n",
-        "login user1 pass1\n",
-        "signup user1 pass1\n",
-        "login user1 wrongpass\n",
-        "UPLOAD test.txt\n",
-        "DOWNLOAD test.txt\n",
-        "INVALID cmd\n"
+        "UPLOAD test.txt\n",           // Should fail - not logged in
+        "signup user1 pass1\n",         // Should succeed and auto-login
+        "UPLOAD test.txt\n",            // Should work - logged in
+        "login user2 pass2\n",          // Should fail - already logged in as user1
+        "DOWNLOAD data.txt\n",          // Should work - still logged in
+        "logout\n",                     // Should succeed
+        "DOWNLOAD data.txt\n",          // Should fail - logged out
+        "login user1 pass1\n",          // Should succeed - log back in
+        "UPLOAD file2.txt\n",           // Should work - logged in again
+        "signup user1 pass1\n",         // Should fail - user exists
+        "logout\n",                     // Logout again
+        "signup user2 pass2\n",         // Should succeed - create new user
+        "INVALID cmd\n"                 // Should fail - unknown command
     };
-    for (int i = 0; i < 7; i++) {
+    
+    for (int i = 0; i < 13; i++) {
+        printf("[Client] Sending: %s", commands[i]);
         write(sock, commands[i], strlen(commands[i]));
-        valread = read(sock, buffer, 1024);
+        
+        // Read server response
+        memset(buffer, 0, sizeof(buffer));
+        valread = read(sock, buffer, sizeof(buffer) - 1);
         if (valread > 0) {
             buffer[valread] = '\0';
-            printf("Server response: %s", buffer);
+            printf("[Server] %s", buffer);
+            if (buffer[valread - 1] != '\n') {
+                printf("\n");
+            }
+        } else {
+            printf("[Client] Error: No response from server\n");
         }
-        sleep(1); // Add delay to ensure server processes each command
+        
+        printf("\n");
+        sleep(1); // Delay between commands
     }
-    sleep(2); // Wait before closing
+    
+    printf("==========================================\n");
+    printf("[Client] Closing connection...\n");
+    sleep(1);
     close(sock);
     return 0;
 }

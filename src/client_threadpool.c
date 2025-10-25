@@ -1,10 +1,11 @@
 // Each thread handles one client at a time, performing lightweight tasks like authentication and command parsing,
-// then passing work to Member B’s Worker Threadpool via the Task Queue.
+// then passing work to Member B's Worker Threadpool via the Task Queue.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <string.h>
 #include "client_threadpool.h" 
 #include "commands.h"           // For auth and command handling 
 
@@ -48,34 +49,36 @@ void* client_thread(void* arg) {
         int sockfd = dequeue_socket();
         if (sockfd != -1) {
             printf("Thread %d handling socket %d\n", thread_id, sockfd);
-            // Step 1: Handle authentication (signup/login)
-            handle_authentication(sockfd); // Placeholder, to be defined in commands.c
             
-            // *** FIX 1: LOOP FOR MULTIPLE COMMANDS ***
+            // Create session for this connection (starts unauthenticated)
+            ClientSession session = {0};
+            
+            // *** COMMAND LOOP - no upfront authentication required ***
             while (1) {
                 char buffer[1024] = {0};
-                int total_bytes = 0;
-                while (total_bytes < 1023) { // Leave room for null terminator
-                    int bytes_read = read(sockfd, buffer + total_bytes, 1);
-                    if (bytes_read <= 0) {
-                        printf("Thread %d detected socket %d closed (bytes read: %d)\n", thread_id, sockfd, bytes_read);
-                        break;
-                    }
-                    total_bytes += bytes_read;
-                    if (buffer[total_bytes - 1] == '\n') {
-                        buffer[total_bytes - 1] = 0; // Replace newline with null terminator
-                        break;
-                    }
+                int bytes_read = read(sockfd, buffer, sizeof(buffer) - 1);
+                
+                if (bytes_read <= 0) {
+                    printf("Thread %d detected socket %d closed (bytes read: %d)\n", 
+                           thread_id, sockfd, bytes_read);
+                    break;
                 }
-                if (total_bytes > 0) {
-                    printf("Command received on socket %d: %s (bytes read: %d)\n", sockfd, buffer, total_bytes);
-                    handle_commands(sockfd, buffer); // Pass the full command
+                
+                buffer[bytes_read] = '\0';
+                // Remove trailing newline if present
+                buffer[strcspn(buffer, "\n")] = '\0';
+                
+                if (strlen(buffer) > 0) {
+                    printf("Command received on socket %d: %s (bytes read: %d)\n", 
+                           sockfd, buffer, bytes_read);
+                    // Pass session to handle_commands for state tracking
+                    handle_commands(sockfd, buffer, &session);
                 } else {
                     break; // Exit loop if no more data
                 }
             }
             
-            close(sockfd); // Close socket after processing (simplified)
+            close(sockfd); // Close socket after processing
         }
         // *** FIX 3: SHORTER SLEEP ***
         usleep(100000); // 0.1 second instead of 1 second
