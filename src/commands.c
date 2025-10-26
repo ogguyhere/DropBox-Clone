@@ -1,14 +1,17 @@
 // src/commands.c
-
-// It handles the processing of client requests after a socket is passed to a thread from the Client Threadpool.
-// It acts as the intermediary between the client's input and the server's response, managing authentication and command execution.
+// ---------------------------------------------------------------------------
+// Handles client commands: signup, login, upload, download, delete, list.
+// Uses condition variables (no busy wait) for worker completion signaling.
+// ---------------------------------------------------------------------------
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include "commands.h"
 #include "file_io.h"
+#include "task.h"
 
 // ================= BASE64 DECODE =================
 static int base64_decode(const char *in, unsigned char *out, int out_size) {
@@ -55,6 +58,34 @@ static void send_response(int sockfd, const char *msg) {
     write(sockfd, msg, strlen(msg));
 }
 
+// ========================================================
+// Helper to enqueue task and wait until worker completes
+// ========================================================
+static void enqueue_and_wait(queue_t *queue, task_t *task) {
+    pthread_mutex_init(&task->lock, NULL);
+    pthread_cond_init(&task->completed, NULL);
+    task->done = 0;
+
+    if (queue_enqueue(queue, *task) != 0) {
+        fprintf(stderr, "Failed to enqueue task\n");
+        pthread_mutex_destroy(&task->lock);
+        pthread_cond_destroy(&task->completed);
+        return;
+    }
+
+    pthread_mutex_lock(&task->lock);
+    while (!task->done) {
+        pthread_cond_wait(&task->completed, &task->lock);
+    }
+    pthread_mutex_unlock(&task->lock);
+
+    pthread_mutex_destroy(&task->lock);
+    pthread_cond_destroy(&task->completed);
+}
+
+// ========================================================
+// Account management commands
+// ========================================================
 static void handle_signup(int sockfd, char *username, char *password, ClientSession *session, metadata_t *metadata) {
     if (!username || !password) {
         send_response(sockfd, "*** Invalid format. Usage: signup <username> <password>\n");
@@ -70,14 +101,10 @@ static void handle_signup(int sockfd, char *username, char *password, ClientSess
         return;
     }
 
-    // Auto-login after signup
     session->authenticated = 1;
-    strncpy(session->username, username, 49);
-    session->username[49] = '\0';
-    
-    // Create user directory
+    strncpy(session->username, username, sizeof(session->username) - 1);
+    session->username[sizeof(session->username) - 1] = '\0';
     create_user_dir(username);
-    
     send_response(sockfd, "Signup successful. You are now logged in.\n");
 }
 
@@ -96,8 +123,8 @@ static void handle_login(int sockfd, char *username, char *password, ClientSessi
 
     if (metadata_authenticate(metadata, username, password)) {
         session->authenticated = 1;
-        strncpy(session->username, username, 49);
-        session->username[49] = '\0';
+        strncpy(session->username, username, sizeof(session->username) - 1);
+        session->username[sizeof(session->username) - 1] = '\0';
         send_response(sockfd, "Login successful\n");
     } else {
         send_response(sockfd, "*** Error: Invalid credentials\n");
@@ -109,12 +136,14 @@ static void handle_logout(int sockfd, ClientSession *session) {
         send_response(sockfd, "*** Error: Not logged in\n");
         return;
     }
-    
     session->authenticated = 0;
     memset(session->username, 0, sizeof(session->username));
     send_response(sockfd, "Logged out successfully\n");
 }
 
+// ========================================================
+// File operation handlers
+// ========================================================
 static void handle_upload(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
     if (!session->authenticated) {
         send_response(sockfd, "*** Error: Please login first\n");
@@ -128,7 +157,6 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session, qu
 
     send_response(sockfd, "READY_TO_RECEIVE\n");
 
-    // Receive encoded data from client
     char encoded_data[8192];
     int bytes_read = read(sockfd, encoded_data, sizeof(encoded_data) - 1);
     if (bytes_read <= 0) {
@@ -137,22 +165,15 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session, qu
     }
     encoded_data[bytes_read] = '\0';
 
-    // Create task and enqueue to worker
     task_t task = {0};
     task.cmd = UPLOAD;
-    strncpy(task.username, session->username, 63);
-    strncpy(task.filename, filename, 255);
+    strncpy(task.username, session->username, sizeof(task.username) - 1);
+    strncpy(task.filename, filename, sizeof(task.filename) - 1);
     strncpy(task.data, encoded_data, sizeof(task.data) - 1);
     task.sock_fd = sockfd;
-    task.file_size = bytes_read;  // Workers will decode and get actual size
+    task.file_size = bytes_read;
 
-    if (queue_enqueue(task_queue, task) != 0) {
-        send_response(sockfd, "*** Error: Failed to queue task\n");
-        return;
-    }
-
-    // Busy-wait for worker to complete (Phase 2 will improve this)
-    sleep(1);
+    enqueue_and_wait(task_queue, &task);
 }
 
 static void handle_download(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
@@ -166,20 +187,13 @@ static void handle_download(int sockfd, char *filename, ClientSession *session, 
         return;
     }
 
-    // Create task and enqueue to worker
     task_t task = {0};
     task.cmd = DOWNLOAD;
-    strncpy(task.username, session->username, 63);
-    strncpy(task.filename, filename, 255);
+    strncpy(task.username, session->username, sizeof(task.username) - 1);
+    strncpy(task.filename, filename, sizeof(task.filename) - 1);
     task.sock_fd = sockfd;
 
-    if (queue_enqueue(task_queue, task) != 0) {
-        send_response(sockfd, "*** Error: Failed to queue task\n");
-        return;
-    }
-
-    // Busy-wait for worker to complete (Phase 2 will improve this)
-    sleep(1);
+    enqueue_and_wait(task_queue, &task);
 }
 
 static void handle_delete(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
@@ -193,20 +207,13 @@ static void handle_delete(int sockfd, char *filename, ClientSession *session, qu
         return;
     }
 
-    // Create task and enqueue to worker
     task_t task = {0};
     task.cmd = DELETE;
-    strncpy(task.username, session->username, 63);
-    strncpy(task.filename, filename, 255);
+    strncpy(task.username, session->username, sizeof(task.username) - 1);
+    strncpy(task.filename, filename, sizeof(task.filename) - 1);
     task.sock_fd = sockfd;
 
-    if (queue_enqueue(task_queue, task) != 0) {
-        send_response(sockfd, "*** Error: Failed to queue task\n");
-        return;
-    }
-
-    // Busy-wait for worker to complete (Phase 2 will improve this)
-    sleep(1);
+    enqueue_and_wait(task_queue, &task);
 }
 
 static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue) {
@@ -215,21 +222,17 @@ static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue)
         return;
     }
 
-    // Create task and enqueue to worker
     task_t task = {0};
     task.cmd = LIST;
-    strncpy(task.username, session->username, 63);
+    strncpy(task.username, session->username, sizeof(task.username) - 1);
     task.sock_fd = sockfd;
 
-    if (queue_enqueue(task_queue, task) != 0) {
-        send_response(sockfd, "*** Error: Failed to queue task\n");
-        return;
-    }
-
-    // Busy-wait for worker to complete (Phase 2 will improve this)
-    sleep(1);
+    enqueue_and_wait(task_queue, &task);
 }
 
+// ========================================================
+// Dispatcher
+// ========================================================
 void handle_commands(int sockfd, const char *buffer, ClientSession *session, 
                      queue_t *task_queue, metadata_t *metadata) {
     char command[10], arg1[50], arg2[50];

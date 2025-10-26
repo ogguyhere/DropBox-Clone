@@ -172,6 +172,14 @@ void* worker_func(void* args) {
             printf("  SUCCESS: LIST for %s\n", task.username);
         }
 
+        // --- Signal task completion (Phase 2 addition) ---
+        pthread_mutex_lock(&task.lock);
+        task.done = 1;
+        task.result = 0;  // or -1 if error handling was added
+        pthread_cond_signal(&task.completed);
+        pthread_mutex_unlock(&task.lock);
+
+
         // Check shutdown flag after task
         if (shutdown_flag) {
             printf("Worker %d shutting down after task\n", wargs->id);
