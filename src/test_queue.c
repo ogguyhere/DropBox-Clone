@@ -15,12 +15,16 @@
 
 int main()
 {
+    printf("=== Queue + Worker Pool Test ===\n\n");
+    
     queue_t *task_q = queue_init();
     if (!task_q)
     {
         fprintf(stderr, "Queue init failed\n");
         return 1;
     }
+    printf("✓ Queue initialized\n");
+    
     metadata_t *meta = metadata_init();
     if (!meta)
     {
@@ -28,12 +32,16 @@ int main()
         queue_destroy(task_q);
         return 1;
     }
-    // Add test users
-    if (metadata_add_user(meta, "alice") != 0 || metadata_add_user(meta, "bob") != 0)
-    {
-        fprintf(stderr, "Add user failed\n");
-        // Cleanup...
+    printf("✓ Metadata initialized\n");
+    
+    // Add test users with passwords
+    if (metadata_add_user(meta, "alice", "pass123") != 0) {
+        fprintf(stderr, "Failed to add user alice\n");
     }
+    if (metadata_add_user(meta, "bob", "pass456") != 0) {
+        fprintf(stderr, "Failed to add user bob\n");
+    }
+    printf("✓ Test users created (alice, bob)\n\n");
 
     // Pre-create disk file for alice
     create_user_dir("alice");
@@ -42,17 +50,18 @@ int main()
     {
         fwrite("dummy content", 1, 13, f); // 13 bytes
         fclose(f);
-        printf("Pre-created test_file.txt on disk (13 bytes)\n");
+        printf("✓ Pre-created test_file.txt on disk (13 bytes)\n");
         // Update metadata to match
         metadata_add_file(meta, "alice", "test_file.txt", 13);
     }
 
     // Pre-add file for alice (to test DELETE/LIST)
     metadata_add_file(meta, "alice", "file1.txt", 500);
+    printf("✓ Pre-added file1.txt to metadata (500 bytes)\n\n");
 
-    // Creating Pool : 3 Workers for now...
+    // Creating Pool: 3 Workers
     pthread_t workers[3];
-    workers_args_t wargs[3];
+    worker_args_t wargs[3];  // ✅ FIXED: Correct struct name
     for (int i = 0; i < 3; i++)
     {
         wargs[i].task_queue = task_q;
@@ -64,27 +73,15 @@ int main()
             return 1;
         }
     }
+    printf("✓ Worker pool started (3 workers)\n\n");
 
     // Enqueue 5 dummy tasks (simulate clients)
-    // task_t tasks[] = {
-    //     {DELETE, "alice", "file1.txt", 0, -1},
-    //     {LIST, "bob", "", 0, -1},
-    //     {UPLOAD, "alice", "photo.jpg", 1024, -1}, // Stub
-    //     {DELETE, "alice", "file2.txt", 0, -1},
-    //     {LIST, "bob", "", 0, -1}};
-
-    // task_t tasks[] = {
-    //     {DELETE, "alice", "file1.txt", 0, -1},
-    //     {LIST, "bob", "", 0, -1},
-    //     {UPLOAD, "alice", "photo.jpg", 2000000, -1}, // Big: >1MB, should fail quota
-    //     {DELETE, "alice", "file2.txt", 0, -1},       // This should ERROR (not exist)
-    //     {LIST, "bob", "", 0, -1}};
-
+    printf("=== Enqueueing Test Tasks ===\n");
     task_t tasks[] = {
-        {LIST, "alice", "", 0, -1},                  // Should show test_file.txt 13
+        {LIST, "alice", "", 0, -1},                  // Should show test_file.txt 13 + file1.txt 500
         {DELETE, "alice", "test_file.txt", 0, -1},   // Success
-        {LIST, "alice", "", 0, -1},                  // No files
-        {UPLOAD, "bob", "bigfile.dat", 2000000, -1}, // Quota fail
+        {LIST, "alice", "", 0, -1},                  // Should show only file1.txt
+        {UPLOAD, "bob", "bigfile.dat", 2000000, -1}, // Quota fail (>1MB)
         {DOWNLOAD, "alice", "test_file.txt", 0, -1}  // Error (deleted)
     };
     
@@ -93,18 +90,35 @@ int main()
         if (queue_enqueue(task_q, tasks[i]) != 0)
         {
             fprintf(stderr, "Enqueue %d failed\n", i);
+        } else {
+            printf("  Task %d enqueued\n", i + 1);
         }
         sleep(1); // Spread out for debug
     }
-    // Let workers finish (sleep or join later)
+    
+    // Let workers finish
+    printf("\n=== Waiting for workers to complete ===\n");
     sleep(3);
 
-    // Cleanup (stub—add pthread_join for real)
-    queue_destroy(task_q);
+    // Cleanup
+    printf("\n=== Cleanup ===\n");
+    shutdown_flag = 1;
+    
+    // Signal queue to wake up blocked workers
+    for (int i = 0; i < 3; i++) {
+        task_t dummy = {0};
+        queue_enqueue(task_q, dummy);
+    }
+    
     for (int i = 0; i < 3; i++)
     {
-        pthread_cancel(workers[i]); // Rough shutdown
+        pthread_join(workers[i], NULL);
+        printf("  Worker %d joined\n", i + 1);
     }
-    printf("Test done!\n");
+    
+    queue_destroy(task_q);
+    metadata_destroy(meta);
+    
+    printf("\n=== Test Complete! ===\n");
     return 0;
 }
