@@ -60,27 +60,49 @@ static void send_response(int sockfd, const char *msg) {
 
 // ========================================================
 // Helper to enqueue task and wait until worker completes
+// Now uses heap-allocated task_t so worker and client share the same object.
 // ========================================================
-static void enqueue_and_wait(queue_t *queue, task_t *task) {
+static void enqueue_and_wait(queue_t *queue, task_t *local_task) {
+    if (!queue || !local_task) return;
+
+    // Allocate heap task that will be shared with worker
+    task_t *task = malloc(sizeof(task_t));
+    if (!task) {
+        fprintf(stderr, "Failed to allocate task\n");
+        return;
+    }
+    // Copy contents
+    *task = *local_task;
+
+    // Init per-task sync
     pthread_mutex_init(&task->lock, NULL);
     pthread_cond_init(&task->completed, NULL);
     task->done = 0;
+    task->result = -1;
 
-    if (queue_enqueue(queue, *task) != 0) {
+    // Enqueue (queue takes ownership of 'task')
+    if (queue_enqueue(queue, task) != 0) {
         fprintf(stderr, "Failed to enqueue task\n");
         pthread_mutex_destroy(&task->lock);
         pthread_cond_destroy(&task->completed);
+        free(task);
         return;
     }
 
+    // Wait for worker to signal completion on same task object
     pthread_mutex_lock(&task->lock);
     while (!task->done) {
         pthread_cond_wait(&task->completed, &task->lock);
     }
     pthread_mutex_unlock(&task->lock);
 
+    // Capture result if needed (task->result)
+    // Cleanup sync resources and free task (worker may also free in some designs;
+    // here we free after waiting to ensure consistent ownership)
     pthread_mutex_destroy(&task->lock);
     pthread_cond_destroy(&task->completed);
+    // free the task memory (worker should not free it in this design)
+    free(task);
 }
 
 // ========================================================
@@ -165,15 +187,15 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session, qu
     }
     encoded_data[bytes_read] = '\0';
 
-    task_t task = {0};
-    task.cmd = UPLOAD;
-    strncpy(task.username, session->username, sizeof(task.username) - 1);
-    strncpy(task.filename, filename, sizeof(task.filename) - 1);
-    strncpy(task.data, encoded_data, sizeof(task.data) - 1);
-    task.sock_fd = sockfd;
-    task.file_size = bytes_read;
+    task_t local = {0};
+    local.cmd = UPLOAD;
+    strncpy(local.username, session->username, sizeof(local.username) - 1);
+    strncpy(local.filename, filename, sizeof(local.filename) - 1);
+    strncpy(local.data, encoded_data, sizeof(local.data) - 1);
+    local.sock_fd = sockfd;
+    local.file_size = bytes_read;
 
-    enqueue_and_wait(task_queue, &task);
+    enqueue_and_wait(task_queue, &local);
 }
 
 static void handle_download(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
@@ -187,13 +209,13 @@ static void handle_download(int sockfd, char *filename, ClientSession *session, 
         return;
     }
 
-    task_t task = {0};
-    task.cmd = DOWNLOAD;
-    strncpy(task.username, session->username, sizeof(task.username) - 1);
-    strncpy(task.filename, filename, sizeof(task.filename) - 1);
-    task.sock_fd = sockfd;
+    task_t local = {0};
+    local.cmd = DOWNLOAD;
+    strncpy(local.username, session->username, sizeof(local.username) - 1);
+    strncpy(local.filename, filename, sizeof(local.filename) - 1);
+    local.sock_fd = sockfd;
 
-    enqueue_and_wait(task_queue, &task);
+    enqueue_and_wait(task_queue, &local);
 }
 
 static void handle_delete(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
@@ -207,13 +229,13 @@ static void handle_delete(int sockfd, char *filename, ClientSession *session, qu
         return;
     }
 
-    task_t task = {0};
-    task.cmd = DELETE;
-    strncpy(task.username, session->username, sizeof(task.username) - 1);
-    strncpy(task.filename, filename, sizeof(task.filename) - 1);
-    task.sock_fd = sockfd;
+    task_t local = {0};
+    local.cmd = DELETE;
+    strncpy(local.username, session->username, sizeof(local.username) - 1);
+    strncpy(local.filename, filename, sizeof(local.filename) - 1);
+    local.sock_fd = sockfd;
 
-    enqueue_and_wait(task_queue, &task);
+    enqueue_and_wait(task_queue, &local);
 }
 
 static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue) {
@@ -222,12 +244,12 @@ static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue)
         return;
     }
 
-    task_t task = {0};
-    task.cmd = LIST;
-    strncpy(task.username, session->username, sizeof(task.username) - 1);
-    task.sock_fd = sockfd;
+    task_t local = {0};
+    local.cmd = LIST;
+    strncpy(local.username, session->username, sizeof(local.username) - 1);
+    local.sock_fd = sockfd;
 
-    enqueue_and_wait(task_queue, &task);
+    enqueue_and_wait(task_queue, &local);
 }
 
 // ========================================================

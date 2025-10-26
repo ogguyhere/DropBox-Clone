@@ -1,11 +1,15 @@
 # Makefile - Unified Dropbox Clone Build System
 
-CC = gcc
-CFLAGS = -Wall -g -pthread
+CC = gcc 
+
+CFLAGS = -Wall -g -pthread -I$(SRC_DIR)
+
 SRC_DIR = src
+TEST_DIR = tests
 TARGET = server
 CLIENT = client
 FILE_CLIENT = client_file_testing
+QUEUE_TEST = test_queue
 
 # Source files
 SERVER_SRCS = $(SRC_DIR)/main.c $(SRC_DIR)/client_threadpool.c $(SRC_DIR)/commands.c \
@@ -13,6 +17,7 @@ SERVER_SRCS = $(SRC_DIR)/main.c $(SRC_DIR)/client_threadpool.c $(SRC_DIR)/comman
 
 CLIENT_SRCS = $(SRC_DIR)/client.c
 FILE_CLIENT_SRCS = $(SRC_DIR)/client_file_testing.c
+QUEUE_TEST_SRCS = $(TEST_DIR)/test_queue.c $(SRC_DIR)/queue.c
 
 # Build all targets
 all: $(TARGET) $(CLIENT) $(FILE_CLIENT)
@@ -32,9 +37,21 @@ $(FILE_CLIENT): $(FILE_CLIENT_SRCS)
 	$(CC) $(CFLAGS) -o $(FILE_CLIENT) $(FILE_CLIENT_SRCS)
 	@echo "File testing client compiled successfully"
 
+# ======================
+# Queue test build target
+# ======================
+$(QUEUE_TEST): $(QUEUE_TEST_SRCS)
+	$(CC) $(CFLAGS) -o $(QUEUE_TEST) $(QUEUE_TEST_SRCS)
+	@echo "Queue test compiled successfully"
+
+# Run queue test (renamed to avoid circular dependency)
+run_queue_test: $(QUEUE_TEST)
+	./$(QUEUE_TEST)
+	@echo "Queue test finished"
+
 # Clean build artifacts
 clean:
-	rm -f $(TARGET) $(CLIENT) $(FILE_CLIENT) *.o *~
+	rm -f $(TARGET) $(CLIENT) $(FILE_CLIENT) $(QUEUE_TEST) *.o *~
 	rm -rf storage/
 	@echo "Clean complete"
 
@@ -51,4 +68,4 @@ tsan: clean
 	$(CC) $(CFLAGS) -fsanitize=thread -o $(TARGET) $(SERVER_SRCS)
 	./$(TARGET)
 
-.PHONY: all clean run valgrind tsan
+.PHONY: all clean run valgrind tsan run_queue_test

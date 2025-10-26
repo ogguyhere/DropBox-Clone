@@ -70,15 +70,20 @@ void* worker_func(void* args) {
             return NULL;
         }
 
-        task_t task;
+        task_t *task = NULL;
         if (queue_dequeue(q, &task) != 0) {
             printf("Worker %d dequeue failed\n", wargs->id);
             break;
         }
 
+        if (!task) {
+            // Defensive: continue if empty
+            continue;
+        }
+
         // Determine command string for logging
         const char *cmd_str;
-        switch (task.cmd) {
+        switch (task->cmd) {
             case UPLOAD:   cmd_str = "UPLOAD";   break;
             case DOWNLOAD: cmd_str = "DOWNLOAD"; break;
             case DELETE:   cmd_str = "DELETE";   break;
@@ -89,49 +94,75 @@ void* worker_func(void* args) {
         }
 
         printf("Worker %d executing: %s for user %s (file: %s, size: %zu)\n",
-               wargs->id, cmd_str, task.username, task.filename, task.file_size);
+               wargs->id, cmd_str, task->username, task->filename, task->file_size);
 
         // Handle command execution
-        if (task.cmd == UPLOAD) {
-            create_user_dir(task.username);
+        if (task->cmd == UPLOAD) {
+            create_user_dir(task->username);
             
             // Decode base64 data
             unsigned char decoded_data[8192];
-            int decoded_len = base64_decode(task.data, decoded_data, sizeof(decoded_data));
+            int decoded_len = base64_decode(task->data, decoded_data, sizeof(decoded_data));
             
             if (decoded_len <= 0) {
-                write(task.sock_fd, "*** Error: Failed to decode file data\n", 39);
+                write(task->sock_fd, "*** Error: Failed to decode file data\n", 39);
+                // signal completion
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
             // Check quota
-            if (!metadata_check_quota(meta, task.username, decoded_len)) {
-                write(task.sock_fd, "*** Error: Quota exceeded\n", 27);
+            if (!metadata_check_quota(meta, task->username, decoded_len)) {
+                write(task->sock_fd, "*** Error: Quota exceeded\n", 27);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
             // Save to disk
-            if (save_file(task.username, task.filename, decoded_data, decoded_len) != 0) {
-                write(task.sock_fd, "*** Error: Failed to save file\n", 32);
+            if (save_file(task->username, task->filename, decoded_data, decoded_len) != 0) {
+                write(task->sock_fd, "*** Error: Failed to save file\n", 32);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
             // Update metadata
-            if (metadata_add_file(meta, task.username, task.filename, decoded_len) != 0) {
-                write(task.sock_fd, "*** Error: Failed to update metadata\n", 38);
+            if (metadata_add_file(meta, task->username, task->filename, decoded_len) != 0) {
+                write(task->sock_fd, "*** Error: Failed to update metadata\n", 38);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
-            write(task.sock_fd, "UPLOAD_SUCCESS\n", 15);
-            printf("  SUCCESS: UPLOAD %s for %s (%d bytes)\n", task.filename, task.username, decoded_len);
+            write(task->sock_fd, "UPLOAD_SUCCESS\n", 15);
+            printf("  SUCCESS: UPLOAD %s for %s (%d bytes)\n", task->filename, task->username, decoded_len);
             
-        } else if (task.cmd == DOWNLOAD) {
+        } else if (task->cmd == DOWNLOAD) {
             // Load file from disk
             unsigned char file_data[8192];
             size_t file_size = 0;
             
-            if (load_file(task.username, task.filename, file_data, &file_size, sizeof(file_data)) != 0) {
-                write(task.sock_fd, "*** Error: File not found on server\n", 37);
+            if (load_file(task->username, task->filename, file_data, &file_size, sizeof(file_data)) != 0) {
+                write(task->sock_fd, "*** Error: File not found on server\n", 37);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
@@ -140,46 +171,56 @@ void* worker_func(void* args) {
             int encoded_len = base64_encode(file_data, file_size, encoded_data, sizeof(encoded_data));
             
             if (encoded_len <= 0) {
-                write(task.sock_fd, "*** Error: Failed to encode file\n", 34);
+                write(task->sock_fd, "*** Error: Failed to encode file\n", 34);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
             // Send encoded data
-            write(task.sock_fd, encoded_data, encoded_len);
-            printf("  SUCCESS: DOWNLOAD %s for %s (%zu bytes)\n", task.filename, task.username, file_size);
+            write(task->sock_fd, encoded_data, encoded_len);
+            printf("  SUCCESS: DOWNLOAD %s for %s (%zu bytes)\n", task->filename, task->username, file_size);
             
-        } else if (task.cmd == DELETE) {
-            create_user_dir(task.username);
+        } else if (task->cmd == DELETE) {
+            create_user_dir(task->username);
             
             // Delete from disk
-            if (delete_file(task.username, task.filename) != 0) {
-                write(task.sock_fd, "*** Error: File not found\n", 27);
+            if (delete_file(task->username, task->filename) != 0) {
+                write(task->sock_fd, "*** Error: File not found\n", 27);
+                pthread_mutex_lock(&task->lock);
+                task->result = -1;
+                task->done = 1;
+                pthread_cond_signal(&task->completed);
+                pthread_mutex_unlock(&task->lock);
                 continue;
             }
             
             // Update metadata
-            metadata_remove_file(meta, task.username, task.filename);
-            write(task.sock_fd, "DELETE_SUCCESS\n", 15);
-            printf("  SUCCESS: DELETE %s for %s\n", task.filename, task.username);
+            metadata_remove_file(meta, task->username, task->filename);
+            write(task->sock_fd, "DELETE_SUCCESS\n", 15);
+            printf("  SUCCESS: DELETE %s for %s\n", task->filename, task->username);
             
-        } else if (task.cmd == LIST) {
-            create_user_dir(task.username);
+        } else if (task->cmd == LIST) {
+            create_user_dir(task->username);
             
             char list_output[2048];
-            metadata_list_files(meta, task.username, list_output, sizeof(list_output));
+            metadata_list_files(meta, task->username, list_output, sizeof(list_output));
             
-            write(task.sock_fd, list_output, strlen(list_output));
-            printf("  SUCCESS: LIST for %s\n", task.username);
+            write(task->sock_fd, list_output, strlen(list_output));
+            printf("  SUCCESS: LIST for %s\n", task->username);
         }
 
         // --- Signal task completion (Phase 2 addition) ---
-        pthread_mutex_lock(&task.lock);
-        task.done = 1;
-        task.result = 0;  // or -1 if error handling was added
-        pthread_cond_signal(&task.completed);
-        pthread_mutex_unlock(&task.lock);
+        pthread_mutex_lock(&task->lock);
+        if (task->result != -1) task->result = 0;  // mark success unless already set to -1
+        task->done = 1;
+        pthread_cond_signal(&task->completed);
+        pthread_mutex_unlock(&task->lock);
 
-
+        // Do NOT free(task) here — client side will clean up after waking up
         // Check shutdown flag after task
         if (shutdown_flag) {
             printf("Worker %d shutting down after task\n", wargs->id);
