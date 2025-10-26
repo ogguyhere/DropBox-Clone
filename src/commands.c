@@ -283,3 +283,17 @@ void handle_commands(int sockfd, const char *buffer, ClientSession *session,
         send_response(sockfd, "*** Unknown command\n");
     }
 }
+
+void handle_client(int client_sock, queue_t *task_queue, metadata_t *metadata) {
+    ClientSession session = {0};
+    char buffer[1024];
+
+    while (1) {
+        int n = read(client_sock, buffer, sizeof(buffer)-1);
+        if (n <= 0) break;  // client disconnected
+        buffer[n] = '\0';
+        handle_commands(client_sock, buffer, &session, task_queue, metadata);
+    }
+
+    close(client_sock);
+}

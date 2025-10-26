@@ -25,8 +25,10 @@ This is ---main accept loop---
 
 // Global resources for cleanup
 client_threadpool_t *global_client_pool = NULL;
+
 queue_t *global_task_queue = NULL;
 metadata_t *global_metadata = NULL;
+
 pthread_t worker_threads[WORKER_POOL_SIZE];
 
 // Signal handler for graceful shutdown
@@ -130,6 +132,8 @@ int main() {
     
     // Initialize client threadpool
     global_client_pool = init_client_threadpool(global_task_queue, global_metadata);
+
+    
     if (!global_client_pool) {
         fprintf(stderr, "Failed to initialize client threadpool\n");
         return 1;
