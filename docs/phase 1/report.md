@@ -48,7 +48,7 @@ A multi-threaded file storage server implementing core Dropbox-like functionalit
        ▼
 ┌─────────────────────────┐
 │  Client Threadpool      │
-│  (5 threads)            │
+│                         │
 │  - Authentication       │
 │  - Command parsing      │
 │  - Task creation        │
@@ -245,7 +245,7 @@ Edit these constants in source files:
 
 **client_threadpool.h:**
 ```c
-#define THREAD_POOL_SIZE 5    // Number of client threads
+#define THREAD_POOL_SIZE 20    // Number of client threads
 ```
 
 **metadata.h:**

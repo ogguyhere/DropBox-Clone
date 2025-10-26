@@ -7,7 +7,7 @@
 #include "metadata.h"
 #include <pthread.h>
 
-#define THREAD_POOL_SIZE 5
+#define THREAD_POOL_SIZE 20
 
 // Thread pool context
 typedef struct {
