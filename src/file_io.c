@@ -1,18 +1,19 @@
 // src/file_io.c
 
 #include "file_io.h"
-#include <stdio.h>     // printf/snprintf
-#include <stdlib.h>    // malloc? No, buffers
-#include <string.h>    // strncpy
-#include <sys/stat.h>  // stat, mkdir
-#include <sys/types.h> // mode_t
-#include <unistd.h>    // rmdir? No
-#include <dirent.h>    // opendir/readdir
-#include <errno.h>     // errno
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <errno.h>
 
-// user dir creation s
+// User dir creation
 int create_user_dir(const char* username) {
     if (!username) return -1;
+    
     char user_dir[256];
     snprintf(user_dir, sizeof(user_dir), USER_DIR_FORMAT, username);
     
@@ -23,6 +24,7 @@ int create_user_dir(const char* username) {
             return -1;
         }
     }
+    
     if (stat(user_dir, &st) == -1) {
         if (mkdir(user_dir, 0700) == -1) {
             perror("mkdir user dir");
@@ -32,9 +34,56 @@ int create_user_dir(const char* username) {
     return 0;
 }
 
-// delete files
+// Save file to disk
+int save_file(const char* username, const char* filename, const unsigned char* data, size_t size) {
+    if (!username || !filename || !data) return -1;
+    
+    char full_path[512];
+    snprintf(full_path, sizeof(full_path), FULL_PATH_FORMAT, username, filename);
+    
+    FILE* f = fopen(full_path, "wb");
+    if (!f) {
+        perror("fopen save");
+        return -1;
+    }
+    
+    size_t written = fwrite(data, 1, size, f);
+    fclose(f);
+    
+    if (written != size) {
+        fprintf(stderr, "Write incomplete: %zu/%zu bytes\n", written, size);
+        return -1;
+    }
+    
+    printf("  Disk: Saved %s (%zu bytes)\n", full_path, size);
+    return 0;
+}
+
+// Load file from disk
+int load_file(const char* username, const char* filename, unsigned char* data, size_t* size, size_t max_size) {
+    if (!username || !filename || !data || !size) return -1;
+    
+    char full_path[512];
+    snprintf(full_path, sizeof(full_path), FULL_PATH_FORMAT, username, filename);
+    
+    FILE* f = fopen(full_path, "rb");
+    if (!f) {
+        perror("fopen load");
+        return -1;
+    }
+    
+    size_t read_size = fread(data, 1, max_size, f);
+    fclose(f);
+    
+    *size = read_size;
+    printf("  Disk: Loaded %s (%zu bytes)\n", full_path, read_size);
+    return 0;
+}
+
+// Delete file
 int delete_file(const char* username, const char* filename) {
     if (!username || !filename) return -1;
+    
     char full_path[512];
     snprintf(full_path, sizeof(full_path), FULL_PATH_FORMAT, username, filename);
     
@@ -46,13 +95,15 @@ int delete_file(const char* username, const char* filename) {
         }
         return -1;
     }
-    printf("  Disk: Removed %s\n", full_path);  // Debug
+    
+    printf("  Disk: Removed %s\n", full_path);
     return 0;
 }
 
-// list user 
+// List user directory
 int list_user_dir(const char* username, char* output, size_t out_size) {
     if (!username || !output) return -1;
+    
     char user_dir[256];
     snprintf(user_dir, sizeof(user_dir), USER_DIR_FORMAT, username);
     
@@ -73,6 +124,7 @@ int list_user_dir(const char* username, char* output, size_t out_size) {
     output[0] = '\0';
     struct dirent* entry;
     char buf[512];
+    
     while ((entry = readdir(d)) != NULL) {
         if (entry->d_type == DT_REG) {  // Files only
             char full[512];
@@ -85,17 +137,20 @@ int list_user_dir(const char* username, char* output, size_t out_size) {
         }
     }
     closedir(d);
+    
     if (strlen(output) == 0) {
         strncat(output, "No files\n", out_size - strlen(output) - 1);
     }
     return 0;
 }
 
-//get file 
+// Get file size
 size_t get_file_size(const char* username, const char* filename) {
     if (!username || !filename) return 0;
+    
     char full_path[512];
     snprintf(full_path, sizeof(full_path), FULL_PATH_FORMAT, username, filename);
+    
     struct stat st;
     if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
         return (size_t)st.st_size;

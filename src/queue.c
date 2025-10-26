@@ -6,19 +6,16 @@
 // Dequeue: Lock, wait on cond if empty (releases lock), pop head, unlock.
 // Error Handling: Malloc fails return -1; no full-queue limit (grow as needed).
 // Memory: Nodes freed on dequeue; full destroy frees all.
-// Compile Note: Links with -lpthread for mutex/cond.
 // ---------------------------------------------------------------------------
-
 
 #include "queue.h"
 #include <stdlib.h>
 #include <stdio.h>
 
-queue_t *queue_init(void)
-{
+queue_t *queue_init(void) {
     queue_t *q = malloc(sizeof(queue_t));
-    if (!q)
-        return NULL;
+    if (!q) return NULL;
+    
     q->head = q->tail = NULL;
     q->size = 0;
     pthread_mutex_init(&q->lock, NULL);
@@ -26,14 +23,12 @@ queue_t *queue_init(void)
     return q;
 }
 
-void queue_destroy(queue_t *q)
-{
-    if (!q)
-        return;
+void queue_destroy(queue_t *q) {
+    if (!q) return;
+    
     pthread_mutex_lock(&q->lock);
     node_t *curr = q->head;
-    while (curr)
-    {
+    while (curr) {
         node_t *next = curr->next;
         free(curr);
         curr = next;
@@ -44,53 +39,49 @@ void queue_destroy(queue_t *q)
     free(q);
 }
 
-int queue_enqueue(queue_t *q, task_t task)
-{
-    if (!q)
-        return -1;
+int queue_enqueue(queue_t *q, task_t task) {
+    if (!q) return -1;
+    
     node_t *new_node = malloc(sizeof(node_t));
-    if (!new_node)
-        return -1;
+    if (!new_node) return -1;
+    
     new_node->task = task;
     new_node->next = NULL;
 
     pthread_mutex_lock(&q->lock);
-    if (q->tail)
-    {
+    if (q->tail) {
         q->tail->next = new_node;
-    }
-    else
-    {
+    } else {
         q->head = new_node;
     }
     q->tail = new_node;
     q->size++;
     pthread_mutex_unlock(&q->lock);
-    pthread_cond_signal(&q->cond); // wakeup the waiter
+    pthread_cond_signal(&q->cond);  // Wakeup a waiter
     return 0;
 }
 
-int queue_dequeue(queue_t *q, task_t *task)
-{
-    if (!q || !task)
-        return -1;
+int queue_dequeue(queue_t *q, task_t *task) {
+    if (!q || !task) return -1;
+    
     pthread_mutex_lock(&q->lock);
-    while (q->size == 0)
-    { // Busy wait? No block on cond
-        pthread_cond_wait(&q->cond, &q->lock); // automatically unlock + wait 
+    while (q->size == 0) {
+        pthread_cond_wait(&q->cond, &q->lock);  // Automatically unlock + wait 
     }
+    
     node_t *front = q->head;
-    if (!front)
-    {
+    if (!front) {
         pthread_mutex_unlock(&q->lock);
         return -1;
     }
-    *task = front->task; // copy payload
+    
+    *task = front->task;  // Copy payload
     q->head = front->next;
-    if (!q->head)
-        q->tail = NULL; // last item phew phew
+    if (!q->head) {
+        q->tail = NULL;  // Last item removed
+    }
     q->size--;
     pthread_mutex_unlock(&q->lock);
-    free(front); // clean node
+    free(front);  // Clean node
     return 0;
 }

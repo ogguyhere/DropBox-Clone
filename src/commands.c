@@ -1,3 +1,5 @@
+// src/commands.c
+
 // It handles the processing of client requests after a socket is passed to a thread from the Client Threadpool.
 // It acts as the intermediary between the client's input and the server's response, managing authentication and command execution.
 
@@ -6,59 +8,20 @@
 #include <string.h>
 #include <unistd.h>
 #include "commands.h"
+#include "file_io.h"
 
-typedef struct {
-    char username[50];
-    char password[50];
-} User;
-
-User users[10];
-int user_count = 0;
- 
-
-// ================= BASE64 ENCODE =================
-static const char base64_table[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-int base64_encode(const unsigned char *in, int len, char *out, int out_size) {
-    int out_len = 0;
-    for (int i = 0; i < len; i += 3) {
-        int val = (in[i] << 16) + ((i + 1 < len ? in[i + 1] : 0) << 8) + (i + 2 < len ? in[i + 2] : 0);
-        if (out_len + 4 >= out_size) break; // safety
-        out[out_len++] = base64_table[(val >> 18) & 63];
-        out[out_len++] = base64_table[(val >> 12) & 63];
-        out[out_len++] = (i + 1 < len) ? base64_table[(val >> 6) & 63] : '=';
-        out[out_len++] = (i + 2 < len) ? base64_table[val & 63] : '=';
-    }
-    out[out_len] = '\0';
-    return out_len;
-}
-
-// ================= FILE → BASE64 STRING =================
-int encode_file_to_base64(const char *filename, char *out, int out_size) {
-    FILE *f = fopen(filename, "rb");
-    if (!f) return -1;
-
-    unsigned char data[4096];
-    size_t len = fread(data, 1, sizeof(data), f);
-    fclose(f);
-
-    if (len == 0) return -2;
-    return base64_encode(data, len, out, out_size);
-}
-int base64_decode(const char *in, unsigned char *out, int out_size) {
-    int len = strlen(in);
-    int out_len = 0;
-    int val = 0, valb = -8;
-
+// ================= BASE64 DECODE =================
+static int base64_decode(const char *in, unsigned char *out, int out_size) {
+    static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     int decode_table[256];
     memset(decode_table, -1, sizeof(decode_table));
     for (int i = 0; i < 64; i++)
-        decode_table[(unsigned char)"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i]] = i;
+        decode_table[(unsigned char)b64_table[i]] = i;
 
-    for (int i = 0; i < len; i++) {
+    int val = 0, valb = -8, out_len = 0;
+    for (int i = 0; in[i]; i++) {
         unsigned char c = in[i];
-        if (decode_table[c] == -1) continue; // skip padding or invalid chars
+        if (decode_table[c] == -1) continue;
         val = (val << 6) + decode_table[c];
         valb += 6;
         if (valb >= 0) {
@@ -70,71 +33,55 @@ int base64_decode(const char *in, unsigned char *out, int out_size) {
     return out_len;
 }
 
-// ================= SEND UPLOAD =================
-void send_upload_command(int sock, const char *command, const char *filename) {
-    char buffer[8192];
-    write(sock, command, strlen(command));
+// ================= BASE64 ENCODE =================
+static const char base64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    int valread = read(sock, buffer, sizeof(buffer) - 1);
-    buffer[valread] = '\0';
-    printf("[Server] %s", buffer);
-
-    if (!strstr(buffer, "READY_TO_RECEIVE")) {
-        printf("*** Server not ready for upload.\n");
-        return;
+static int base64_encode(const unsigned char *in, int len, char *out, int out_size) {
+    int out_len = 0;
+    for (int i = 0; i < len; i += 3) {
+        int val = (in[i] << 16) + ((i + 1 < len ? in[i + 1] : 0) << 8) + (i + 2 < len ? in[i + 2] : 0);
+        if (out_len + 4 >= out_size) break;
+        out[out_len++] = base64_table[(val >> 18) & 63];
+        out[out_len++] = base64_table[(val >> 12) & 63];
+        out[out_len++] = (i + 1 < len) ? base64_table[(val >> 6) & 63] : '=';
+        out[out_len++] = (i + 2 < len) ? base64_table[val & 63] : '=';
     }
-
-    char encoded_data[8192];
-    int encoded_len = encode_file_to_base64(filename, encoded_data, sizeof(encoded_data));
-    if (encoded_len < 0) {
-        printf("*** Error: failed to read or encode %s\n", filename);
-        return;
-    }
-
-    write(sock, encoded_data, encoded_len);
-
-    memset(buffer, 0, sizeof(buffer));
-    valread = read(sock, buffer, sizeof(buffer) - 1);
-    buffer[valread] = '\0';
-    printf("[Server] %s\n", buffer);
+    out[out_len] = '\0';
+    return out_len;
 }
 
 static void send_response(int sockfd, const char *msg) {
     write(sockfd, msg, strlen(msg));
 }
 
-static void handle_signup(int sockfd, char *username, char *password, ClientSession *session) {
-    extern User users[10];
-    extern int user_count;
-
+static void handle_signup(int sockfd, char *username, char *password, ClientSession *session, metadata_t *metadata) {
     if (!username || !password) {
         send_response(sockfd, "*** Invalid format. Usage: signup <username> <password>\n");
         return;
     }
 
-    for (int i = 0; i < user_count; i++) {
-        if (strcmp(users[i].username, username) == 0) {
-            send_response(sockfd, "*** Error: User already exists\n");
-            return;
-        }
+    int result = metadata_add_user(metadata, username, password);
+    if (result == -2) {
+        send_response(sockfd, "*** Error: User already exists\n");
+        return;
+    } else if (result != 0) {
+        send_response(sockfd, "*** Error: Signup failed\n");
+        return;
     }
 
-    if (user_count < 10) {
-        strncpy(users[user_count].username, username, 49);
-        strncpy(users[user_count].password, password, 49);
-        user_count++;
-        session->authenticated = 1;
-        strncpy(session->username, username, 49);
-        send_response(sockfd, "Signup successful. You are now logged in.\n");
-    } else {
-        send_response(sockfd, "*** Error: User limit reached\n");
-    }
+    // Auto-login after signup
+    session->authenticated = 1;
+    strncpy(session->username, username, 49);
+    session->username[49] = '\0';
+    
+    // Create user directory
+    create_user_dir(username);
+    
+    send_response(sockfd, "Signup successful. You are now logged in.\n");
 }
 
-static void handle_login(int sockfd, char *username, char *password, ClientSession *session) {
-    extern User users[10];
-    extern int user_count;
-
+static void handle_login(int sockfd, char *username, char *password, ClientSession *session, metadata_t *metadata) {
     if (session->authenticated) {
         char msg[128];
         snprintf(msg, sizeof(msg), "*** Error: Already logged in as '%s'\n", session->username);
@@ -142,17 +89,19 @@ static void handle_login(int sockfd, char *username, char *password, ClientSessi
         return;
     }
 
-    for (int i = 0; i < user_count; i++) {
-        if (strcmp(users[i].username, username) == 0 &&
-            strcmp(users[i].password, password) == 0) {
-            session->authenticated = 1;
-            strncpy(session->username, username, 49);
-            send_response(sockfd, "Login successful\n");
-            return;
-        }
+    if (!username || !password) {
+        send_response(sockfd, "*** Invalid format. Usage: login <username> <password>\n");
+        return;
     }
 
-    send_response(sockfd, "*** Error: Invalid credentials\n");
+    if (metadata_authenticate(metadata, username, password)) {
+        session->authenticated = 1;
+        strncpy(session->username, username, 49);
+        session->username[49] = '\0';
+        send_response(sockfd, "Login successful\n");
+    } else {
+        send_response(sockfd, "*** Error: Invalid credentials\n");
+    }
 }
 
 static void handle_logout(int sockfd, ClientSession *session) {
@@ -160,12 +109,13 @@ static void handle_logout(int sockfd, ClientSession *session) {
         send_response(sockfd, "*** Error: Not logged in\n");
         return;
     }
+    
     session->authenticated = 0;
     memset(session->username, 0, sizeof(session->username));
     send_response(sockfd, "Logged out successfully\n");
 }
 
-static void handle_upload(int sockfd, char *filename, ClientSession *session) {
+static void handle_upload(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
     if (!session->authenticated) {
         send_response(sockfd, "*** Error: Please login first\n");
         return;
@@ -178,6 +128,7 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session) {
 
     send_response(sockfd, "READY_TO_RECEIVE\n");
 
+    // Receive encoded data from client
     char encoded_data[8192];
     int bytes_read = read(sockfd, encoded_data, sizeof(encoded_data) - 1);
     if (bytes_read <= 0) {
@@ -186,31 +137,25 @@ static void handle_upload(int sockfd, char *filename, ClientSession *session) {
     }
     encoded_data[bytes_read] = '\0';
 
-    // Decode before saving (bonus implementation)
-    unsigned char decoded_data[8192];
-    int decoded_len = base64_decode(encoded_data, decoded_data, sizeof(decoded_data));
-    if (decoded_len <= 0) {
-        send_response(sockfd, "*** Error: Failed to decode Base64 data\n");
+    // Create task and enqueue to worker
+    task_t task = {0};
+    task.cmd = UPLOAD;
+    strncpy(task.username, session->username, 63);
+    strncpy(task.filename, filename, 255);
+    strncpy(task.data, encoded_data, sizeof(task.data) - 1);
+    task.sock_fd = sockfd;
+    task.file_size = bytes_read;  // Workers will decode and get actual size
+
+    if (queue_enqueue(task_queue, task) != 0) {
+        send_response(sockfd, "*** Error: Failed to queue task\n");
         return;
     }
 
-    // Save decoded file to disk
-    char save_path[300];
-    snprintf(save_path, sizeof(save_path), "uploads/%s", filename);
-    FILE *f = fopen(save_path, "wb");
-    if (!f) {
-        send_response(sockfd, "*** Error: Could not save file\n");
-        return;
-    }
-
-    fwrite(decoded_data, 1, decoded_len, f);
-    fclose(f);
-
-    send_response(sockfd, "UPLOAD_SUCCESS\n");
+    // Busy-wait for worker to complete (Phase 2 will improve this)
+    sleep(1);
 }
 
-
-static void handle_download(int sockfd, char *filename, ClientSession *session) {
+static void handle_download(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
     if (!session->authenticated) {
         send_response(sockfd, "*** Error: Please login first\n");
         return;
@@ -221,36 +166,72 @@ static void handle_download(int sockfd, char *filename, ClientSession *session) 
         return;
     }
 
-    // Construct full path
-    char filepath[300];
-    snprintf(filepath, sizeof(filepath), "uploads/%s", filename);
+    // Create task and enqueue to worker
+    task_t task = {0};
+    task.cmd = DOWNLOAD;
+    strncpy(task.username, session->username, 63);
+    strncpy(task.filename, filename, 255);
+    task.sock_fd = sockfd;
 
-    FILE *f = fopen(filepath, "rb");
-    if (!f) {
-        send_response(sockfd, "*** Error: File not found on server\n");
+    if (queue_enqueue(task_queue, task) != 0) {
+        send_response(sockfd, "*** Error: Failed to queue task\n");
         return;
     }
 
-    // Read file in chunks
-    unsigned char file_buf[4096];
-    char encoded_buf[8192]; // Base64 output buffer
-    size_t bytes_read;
-
-    while ((bytes_read = fread(file_buf, 1, sizeof(file_buf), f)) > 0) {
-        int encoded_len = base64_encode(file_buf, bytes_read, encoded_buf, sizeof(encoded_buf));
-        if (encoded_len <= 0) {
-            send_response(sockfd, "*** Error: Failed to encode file\n");
-            fclose(f);
-            return;
-        }
-        write(sockfd, encoded_buf, encoded_len);
-    }
-
-    fclose(f);
+    // Busy-wait for worker to complete (Phase 2 will improve this)
+    sleep(1);
 }
 
+static void handle_delete(int sockfd, char *filename, ClientSession *session, queue_t *task_queue) {
+    if (!session->authenticated) {
+        send_response(sockfd, "*** Error: Please login first\n");
+        return;
+    }
 
-void handle_commands(int sockfd, const char *buffer, ClientSession *session) {
+    if (!filename) {
+        send_response(sockfd, "*** Invalid format. Usage: DELETE <filename>\n");
+        return;
+    }
+
+    // Create task and enqueue to worker
+    task_t task = {0};
+    task.cmd = DELETE;
+    strncpy(task.username, session->username, 63);
+    strncpy(task.filename, filename, 255);
+    task.sock_fd = sockfd;
+
+    if (queue_enqueue(task_queue, task) != 0) {
+        send_response(sockfd, "*** Error: Failed to queue task\n");
+        return;
+    }
+
+    // Busy-wait for worker to complete (Phase 2 will improve this)
+    sleep(1);
+}
+
+static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue) {
+    if (!session->authenticated) {
+        send_response(sockfd, "*** Error: Please login first\n");
+        return;
+    }
+
+    // Create task and enqueue to worker
+    task_t task = {0};
+    task.cmd = LIST;
+    strncpy(task.username, session->username, 63);
+    task.sock_fd = sockfd;
+
+    if (queue_enqueue(task_queue, task) != 0) {
+        send_response(sockfd, "*** Error: Failed to queue task\n");
+        return;
+    }
+
+    // Busy-wait for worker to complete (Phase 2 will improve this)
+    sleep(1);
+}
+
+void handle_commands(int sockfd, const char *buffer, ClientSession *session, 
+                     queue_t *task_queue, metadata_t *metadata) {
     char command[10], arg1[50], arg2[50];
     int args = sscanf(buffer, "%9s %49s %49s", command, arg1, arg2);
 
@@ -260,15 +241,19 @@ void handle_commands(int sockfd, const char *buffer, ClientSession *session) {
     }
 
     if (strcmp(command, "signup") == 0) {
-        handle_signup(sockfd, args == 3 ? arg1 : NULL, args == 3 ? arg2 : NULL, session);
+        handle_signup(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
     } else if (strcmp(command, "login") == 0) {
-        handle_login(sockfd, args == 3 ? arg1 : NULL, args == 3 ? arg2 : NULL, session);
+        handle_login(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
     } else if (strcmp(command, "logout") == 0) {
         handle_logout(sockfd, session);
     } else if (strcmp(command, "UPLOAD") == 0) {
-        handle_upload(sockfd, args >= 2 ? arg1 : NULL, session);
+        handle_upload(sockfd, args >= 2 ? arg1 : NULL, session, task_queue);
     } else if (strcmp(command, "DOWNLOAD") == 0) {
-        handle_download(sockfd, args >= 2 ? arg1 : NULL, session);
+        handle_download(sockfd, args >= 2 ? arg1 : NULL, session, task_queue);
+    } else if (strcmp(command, "DELETE") == 0) {
+        handle_delete(sockfd, args >= 2 ? arg1 : NULL, session, task_queue);
+    } else if (strcmp(command, "LIST") == 0) {
+        handle_list(sockfd, session, task_queue);
     } else {
         send_response(sockfd, "*** Unknown command\n");
     }

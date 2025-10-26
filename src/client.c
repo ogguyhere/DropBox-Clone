@@ -1,3 +1,5 @@
+// src/client.c
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +19,7 @@ int main() {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(8080);
 
-    if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr)<=0) {
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
         printf("\nInvalid address/Address not supported\n");
         return -1;
     }
@@ -26,27 +28,26 @@ int main() {
         printf("\nConnection Failed\n");
         return -1;
     }
+    
     printf("Connected to server on port 8080\n");
     printf("==========================================\n\n");
 
     // *** Comprehensive test with logout ***
     char *commands[] = {
-        "UPLOAD test.txt\n",           // Should fail - not logged in
         "signup user1 pass1\n",         // Should succeed and auto-login
-        "UPLOAD test.txt\n",            // Should work - logged in
+        "LIST\n",                        // Should work - logged in (empty list)
         "login user2 pass2\n",          // Should fail - already logged in as user1
-        "DOWNLOAD data.txt\n",          // Should work - still logged in
         "logout\n",                     // Should succeed
-        "DOWNLOAD data.txt\n",          // Should fail - logged out
+        "LIST\n",                        // Should fail - logged out
         "login user1 pass1\n",          // Should succeed - log back in
-        "UPLOAD file2.txt\n",           // Should work - logged in again
         "signup user1 pass1\n",         // Should fail - user exists
         "logout\n",                     // Logout again
         "signup user2 pass2\n",         // Should succeed - create new user
+        "LIST\n",                        // Should work - logged in as user2
         "INVALID cmd\n"                 // Should fail - unknown command
     };
     
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 11; i++) {
         printf("[Client] Sending: %s", commands[i]);
         write(sock, commands[i], strlen(commands[i]));
         

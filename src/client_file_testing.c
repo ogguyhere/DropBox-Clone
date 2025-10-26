@@ -1,3 +1,5 @@
+// src/client_file_testing.c
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,19 +7,10 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 
-
 // ====== Config ======
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 8080
 #define BUFFER_SIZE 8192
-#define BASE64_LINE 76
-
-// ====== Helper Prototypes ======
-int connect_to_server();
-void send_command(int sock, const char *cmd);
-void read_response(int sock);
-char *encode_base64_file(const char *filename);
-void upload_file(int sock, const char *filename);
 
 // ====== Base64 Encoding ======
 static const char b64_table[] =
@@ -55,8 +48,8 @@ char *encode_base64_file(const char *filename) {
     free(buffer);
     return encoded;
 }
+
 int base64_decode(const char *in, unsigned char *out, int out_size) {
-    static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     int decode_table[256];
     memset(decode_table, -1, sizeof(decode_table));
     for (int i = 0; i < 64; i++)
@@ -76,7 +69,6 @@ int base64_decode(const char *in, unsigned char *out, int out_size) {
     }
     return out_len;
 }
-
 
 // ====== Networking Helpers ======
 int connect_to_server() {
@@ -124,7 +116,7 @@ void upload_file(int sock, const char *filename) {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "UPLOAD %s", filename);
     send_command(sock, cmd);
-    read_response(sock); // expect READY_TO_RECEIVE
+    read_response(sock); // Expect READY_TO_RECEIVE
 
     char *encoded = encode_base64_file(filename);
     if (!encoded) {
@@ -135,31 +127,31 @@ void upload_file(int sock, const char *filename) {
     send(sock, encoded, strlen(encoded), 0);
     free(encoded);
 
-    read_response(sock); // expect UPLOAD_SUCCESS
+    read_response(sock); // Expect UPLOAD_SUCCESS
 }
 
 void download_file(int sock, const char *filename) {
     // Make downloads folder if missing
     mkdir("downloads", 0755);
 
-    // Send correct DOWNLOAD command
+    // Send DOWNLOAD command
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "DOWNLOAD %s", filename);
     send_command(sock, cmd);
 
     // Receive Base64 stream from server
-    char enc_buf[65536]; // assume file <64KB for simplicity
+    char enc_buf[65536];
     int total = 0;
     int n;
 
     while ((n = recv(sock, enc_buf + total, sizeof(enc_buf) - 1 - total, 0)) > 0) {
         total += n;
-        if (n < sizeof(enc_buf)/2) break; // simple heuristic for EOF
+        if (n < sizeof(enc_buf)/2) break; // Simple heuristic for EOF
     }
     enc_buf[total] = '\0';
 
     // Decode entire Base64 at once
-    unsigned char dec_buf[49152]; // 3/4 of encoded buffer
+    unsigned char dec_buf[49152];
     int dec_len = base64_decode(enc_buf, dec_buf, sizeof(dec_buf));
     if (dec_len <= 0) {
         fprintf(stderr, "Failed to decode Base64\n");
@@ -170,16 +162,63 @@ void download_file(int sock, const char *filename) {
     char out_path[512];
     snprintf(out_path, sizeof(out_path), "downloads/%s", filename);
     FILE *out = fopen(out_path, "wb");
-    if (!out) { perror("fopen"); return; }
+    if (!out) { 
+        perror("fopen"); 
+        return; 
+    }
     fwrite(dec_buf, 1, dec_len, out);
     fclose(out);
 
-    printf("Downloaded: %s\n", out_path);
+    printf("Downloaded: %s (%d bytes)\n", out_path, dec_len);
 }
 
 
 
-// ====== Main ======
+void alice_test(int sock) {
+    printf("\n=== Signup alice ===\n");
+    send_command(sock, "signup alice testpass");
+    read_response(sock);
+    sleep(1);
+
+    // --- Test multiple uploads ---
+    printf("\n=== Testing UPLOAD ===\n");
+    upload_file(sock, "test1.txt"); // Base64: "This is test 1 content"
+    upload_file(sock, "test2.txt"); // Base64: "This is test 2 content"
+    upload_file(sock, "test3.txt"); // Base64: "This is test 3 content"
+
+    sleep(1);
+
+    // --- List files ---
+    printf("\n=== Testing LIST ===\n");
+    send_command(sock, "LIST");
+    read_response(sock);
+    sleep(1);
+
+    // --- Download files ---
+    printf("\n=== Testing DOWNLOAD ===\n");
+    download_file(sock, "test1.txt");
+    download_file(sock, "test2.txt");
+    download_file(sock, "test3.txt");
+    sleep(1);
+
+    // --- Delete files ---
+    printf("\n=== Testing DELETE ===\n");
+    send_command(sock, "DELETE test1.txt");
+    read_response(sock); 
+    send_command(sock, "DELETE test3.txt");
+    read_response(sock);
+    sleep(1);
+
+    // --- List again ---
+    printf("\n=== Testing LIST (after delete) ===\n");
+    send_command(sock, "LIST");
+    read_response(sock);
+
+    close(sock);
+    printf("\n=== Test Complete ===\n");
+}
+
+// ==================================== Main ==========================================
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <file_to_upload>\n", argv[0]);
@@ -187,15 +226,48 @@ int main(int argc, char *argv[]) {
     }
 
     int sock = connect_to_server();
-
-    send_command(sock, "signup test1 pass");
-    read_response(sock);
- 
-
-    upload_file(sock, argv[1]);
-
-    download_file(sock, argv[1]);
-    close(sock);
-
+    alice_test(sock);
     return 0;
 }
+
+
+// testuser file op tests:
+    // // Signup
+    // send_command(sock, "signup testuser testpass");
+    // read_response(sock);
+    // sleep(1);
+
+    // // // Upload file
+    // // printf("\n=== Testing UPLOAD ===\n");
+    // // upload_file(sock, argv[1]);
+    // // read_response(sock);
+    // // sleep(1);
+
+    // // List files
+    // printf("\n=== Testing LIST ===\n");
+    // send_command(sock, "LIST");
+    // read_response(sock);
+    // sleep(1);
+
+    // // Download file
+    // printf("\n=== Testing DOWNLOAD ===\n");
+    // download_file(sock, argv[1]);
+    // sleep(1);
+
+    // // Delete file
+    // printf("\n=== Testing DELETE ===\n");
+    // char delete_cmd[256];
+    // snprintf(delete_cmd, sizeof(delete_cmd), "DELETE %s", argv[1]);
+    // send_command(sock, delete_cmd);
+    // read_response(sock);
+    // sleep(1);
+
+    // // List again (should be empty)
+    // printf("\n=== Testing LIST (after delete) ===\n");
+    // send_command(sock, "LIST");
+    // read_response(sock);
+
+    // close(sock);
+    // printf("\n=== Test Complete ===\n");
+
+    // return 0;

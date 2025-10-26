@@ -4,3 +4,7 @@ obj/*
 .vscode
 uploads/*.*
 downloads/*.*
+storage/
+test1.txt
+test2.txt
+test3.txt

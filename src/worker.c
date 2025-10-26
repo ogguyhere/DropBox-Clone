@@ -2,224 +2,183 @@
 
 // ---------------------------------------------------------------------------
 // Each worker thread runs worker_func: Blocks on dequeue, executes task
-// based on cmd_t, prints stubs (real I/O later). Infinite loop with flag check.(rn no flg check)
+// based on cmd_t, handles actual file I/O. Infinite loop with flag check.
 // ---------------------------------------------------------------------------
 
 #include "worker.h"
+#include "file_io.h"
 #include <stdio.h>
 #include <string.h>
-#include "metadata.h" // Adding for metadata funcs
-#include "file_io.h"  //file func add
+#include <unistd.h>
 
-// void *worker_func(void *args)
-// {
-//     workers_args_t *wargs = (workers_args_t *)args;
-//     queue_t *q = wargs->task_queue;
-//     printf("Worker %d started\n", wargs->id);
-
-//     while (1)
-//     { // infinite loop, will add exit flag later
-//         task_t task;
-//         if (queue_dequeue(q, &task) == 0)
-//         {
-//             // read cmds later on just dummy kind of shit rn
-//             printf("Worker %d executing: %s for user %s (file: %s, size: %zu)\n",
-//                    wargs->id,
-//                    (
-//                        task.cmd == UPLOAD ? "UPLOAD" :
-//                        task.cmd == DELETE ? "DELETE":
-//                        task.cmd == LIST     ? "LIST":
-//                        task.cmd == DOWNLOAD ? "DOWNLOAD":
-//                        task.cmd == SIGNUP   ? "SIGNUP" : "LOGIN"),
-//                    task.username, task.filename, task.file_size);
-
-//             // Stub handlers-replace with the real oness later on
-//             if (task.cmd == DELETE)
-//             {
-//                 printf("  Stub: Deleting %s for %s\n", task.filename, task.username);
-//                 // Later: unlink(filename), update quota
-//             }
-//             else if (task.cmd == LIST)
-//             {
-//                 printf("  Stub: Listing files for %s\n", task.username);
-//                 // Later: opendir/readdir
-//             }
-//             else
-//             {
-//                 printf("  Stub: %s (not my command yet)\n", task.filename);
-//             }
-
-//             // TODO: Set result (e.g., success/error msg) for client thread
-//         }
-//         else
-//         {
-//             printf("Worker %d dequeue failed\n", wargs->id);
-//             break; // Exit on error
-//         }
-//     }
-//     printf("Worker %d exiting\n", wargs->id);
-//     return NULL;
-// }
-
-// Global shutdown flag (defined here if not in .h; set by main)
+// Global shutdown flag
 volatile int shutdown_flag = 0;
 
-// changes in function after implementation of meta data
+// ================= BASE64 DECODE =================
+static int base64_decode(const char *in, unsigned char *out, int out_size) {
+    static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int decode_table[256];
+    memset(decode_table, -1, sizeof(decode_table));
+    for (int i = 0; i < 64; i++)
+        decode_table[(unsigned char)b64_table[i]] = i;
 
-void *worker_func(void *args)
-{
-    workers_args_t *wargs = (workers_args_t *)args;
+    int len = strlen(in);
+    int val = 0, valb = -8, out_len = 0;
+
+    for (int i = 0; i < len; i++) {
+        unsigned char c = in[i];
+        if (decode_table[c] == -1) continue;
+        val = (val << 6) + decode_table[c];
+        valb += 6;
+        if (valb >= 0) {
+            if (out_len >= out_size) break;
+            out[out_len++] = (val >> valb) & 0xFF;
+            valb -= 8;
+        }
+    }
+    return out_len;
+}
+
+// ================= BASE64 ENCODE =================
+static const char base64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static int base64_encode(const unsigned char *in, int len, char *out, int out_size) {
+    int out_len = 0;
+    for (int i = 0; i < len; i += 3) {
+        int val = (in[i] << 16) + ((i + 1 < len ? in[i + 1] : 0) << 8) + (i + 2 < len ? in[i + 2] : 0);
+        if (out_len + 4 >= out_size) break;
+        out[out_len++] = base64_table[(val >> 18) & 63];
+        out[out_len++] = base64_table[(val >> 12) & 63];
+        out[out_len++] = (i + 1 < len) ? base64_table[(val >> 6) & 63] : '=';
+        out[out_len++] = (i + 2 < len) ? base64_table[val & 63] : '=';
+    }
+    out[out_len] = '\0';
+    return out_len;
+}
+
+void* worker_func(void* args) {
+    worker_args_t *wargs = (worker_args_t *)args;
     queue_t *q = wargs->task_queue;
-    metadata_t *meta = wargs->metadata; // Grab once for convenience
+    metadata_t *meta = wargs->metadata;
+    
     printf("Worker %d started\n", wargs->id);
 
-    while (1)
-    {
-        // Stub flag check (expand later)
-        if (shutdown_flag)
-        {
+    while (1) {
+        if (shutdown_flag) {
             printf("Worker %d shutting down (flag set)\n", wargs->id);
             return NULL;
         }
 
         task_t task;
-        if (queue_dequeue(q, &task) == 0)
-        {
-            // Step 1: Determine cmd_str for logging (full switch, no ternary cutoff)
-            const char *cmd_str;
-            switch (task.cmd)
-            {
-            case UPLOAD:
-                cmd_str = "UPLOAD";
-                break;
-            case DOWNLOAD:
-                cmd_str = "DOWNLOAD";
-                break;
-            case DELETE:
-                cmd_str = "DELETE";
-                break;
-            case LIST:
-                cmd_str = "LIST";
-                break;
-            case SIGNUP:
-                cmd_str = "SIGNUP";
-                break;
-            case LOGIN:
-                cmd_str = "LOGIN";
-                break;
-            default:
-                cmd_str = "UNKNOWN";
-                break;
-            }
-
-            // Log the execution
-            printf("Worker %d executing: %s for user %s (file: %s, size: %zu)\n",
-                   wargs->id, cmd_str, task.username, task.filename, task.file_size);
-
-            // Step 2: Handle command with metadata
-            if (task.cmd == DELETE)
-            {
-                create_user_dir(task.username);                                // Ensure dir
-                size_t old_size = get_file_size(task.username, task.filename); // For quota
-                int disk_res = delete_file(task.username, task.filename);
-                if (disk_res == 0)
-                {
-                    // Sync metadata (remove + adjust quota)
-                    metadata_remove_file(meta, task.username, task.filename); // Safe if not found
-                    printf("  SUCCESS: Deleted %s for %s (quota freed: %zu bytes)\n", task.filename, task.username, old_size);
-                }
-                else
-                {
-                    printf("  ERROR: Disk delete failed for %s\n", task.filename);
-                }
-            }
-            else if (task.cmd == LIST)
-            {
-                create_user_dir(task.username); // Ensure empty dir if new
-                char list_out[1024] = {0};
-                if (list_user_dir(task.username, list_out, sizeof(list_out)) == 0)
-                {
-                    printf("  %s", list_out);
-                    // Optional: Sync metadata files from disk (Phase 2 full sync)
-                }
-                else
-                {
-                    printf("  ERROR: List failed for %s\n", task.username);
-                }
-            }
-            else if (task.cmd == UPLOAD)
-            {
-                create_user_dir(task.username); // Ensure user dir exists
-                int ok = metadata_check_quota(meta, task.username, task.file_size);
-                if (ok)
-                {
-                    int res = metadata_add_file(meta, task.username, task.filename, task.file_size); // Declare res here
-                    if (res == 0)
-                    {
-                        printf("  SUCCESS: UPLOAD added %s for %s (quota ok)\n", task.filename, task.username);
-                        // TODO: Later - write file to disk (fopen/fwrite at FULL_PATH)
-                    }
-                    else
-                    {
-                        printf("  ERROR: UPLOAD failed - file limit for %s\n", task.username);
-                    }
-                }
-                else
-                {
-                    printf("  ERROR: UPLOAD failed - quota exceeded for %s\n", task.username);
-                }
-            }
-            else if (task.cmd == DOWNLOAD)
-            {
-                // Reuse existing funcs: Check existence + get size
-                user_t *u;
-                size_t file_size = 0;
-                int found = 0;
-                if (metadata_get_user(meta, task.username, &u) == 0)
-                {
-                    for (int i = 0; i < u->num_files; i++)
-                    {
-                        if (strcmp(u->files[i].filename, task.filename) == 0)
-                        {
-                            file_size = u->files[i].size;
-                            found = 1;
-                            break;
-                        }
-                    }
-                }
-                if (found)
-                {
-                    printf("  SUCCESS: DOWNLOAD %s for %s (size: %zu) - would stream from disk\n", task.filename, task.username, file_size);
-                }
-                else
-                {
-                    printf("  ERROR: DOWNLOAD failed - %s not found for %s\n", task.filename, task.username);
-                }
-            }
-            else
-            {
-                // Fallback for SIGNUP/LOGIN (stubs—auth in client threads)
-                printf("  SUCCESS: %s processed for %s\n", cmd_str, task.username);
-            }
-
-            // TODO: Set result (e.g., success/error msg) for client thread
-            // (Phase 2: Package response, enqueue back to client via sock_fd)
-        }
-        else
-        {
+        if (queue_dequeue(q, &task) != 0) {
             printf("Worker %d dequeue failed\n", wargs->id);
-            if (shutdown_flag)
-                return NULL;
-            break; // Exit on error
+            break;
         }
 
-        // Post-exec flag check
-        if (shutdown_flag)
-        {
+        // Determine command string for logging
+        const char *cmd_str;
+        switch (task.cmd) {
+            case UPLOAD:   cmd_str = "UPLOAD";   break;
+            case DOWNLOAD: cmd_str = "DOWNLOAD"; break;
+            case DELETE:   cmd_str = "DELETE";   break;
+            case LIST:     cmd_str = "LIST";     break;
+            case SIGNUP:   cmd_str = "SIGNUP";   break;
+            case LOGIN:    cmd_str = "LOGIN";    break;
+            default:       cmd_str = "UNKNOWN";  break;
+        }
+
+        printf("Worker %d executing: %s for user %s (file: %s, size: %zu)\n",
+               wargs->id, cmd_str, task.username, task.filename, task.file_size);
+
+        // Handle command execution
+        if (task.cmd == UPLOAD) {
+            create_user_dir(task.username);
+            
+            // Decode base64 data
+            unsigned char decoded_data[8192];
+            int decoded_len = base64_decode(task.data, decoded_data, sizeof(decoded_data));
+            
+            if (decoded_len <= 0) {
+                write(task.sock_fd, "*** Error: Failed to decode file data\n", 39);
+                continue;
+            }
+            
+            // Check quota
+            if (!metadata_check_quota(meta, task.username, decoded_len)) {
+                write(task.sock_fd, "*** Error: Quota exceeded\n", 27);
+                continue;
+            }
+            
+            // Save to disk
+            if (save_file(task.username, task.filename, decoded_data, decoded_len) != 0) {
+                write(task.sock_fd, "*** Error: Failed to save file\n", 32);
+                continue;
+            }
+            
+            // Update metadata
+            if (metadata_add_file(meta, task.username, task.filename, decoded_len) != 0) {
+                write(task.sock_fd, "*** Error: Failed to update metadata\n", 38);
+                continue;
+            }
+            
+            write(task.sock_fd, "UPLOAD_SUCCESS\n", 15);
+            printf("  SUCCESS: UPLOAD %s for %s (%d bytes)\n", task.filename, task.username, decoded_len);
+            
+        } else if (task.cmd == DOWNLOAD) {
+            // Load file from disk
+            unsigned char file_data[8192];
+            size_t file_size = 0;
+            
+            if (load_file(task.username, task.filename, file_data, &file_size, sizeof(file_data)) != 0) {
+                write(task.sock_fd, "*** Error: File not found on server\n", 37);
+                continue;
+            }
+            
+            // Encode to base64
+            char encoded_data[12288];
+            int encoded_len = base64_encode(file_data, file_size, encoded_data, sizeof(encoded_data));
+            
+            if (encoded_len <= 0) {
+                write(task.sock_fd, "*** Error: Failed to encode file\n", 34);
+                continue;
+            }
+            
+            // Send encoded data
+            write(task.sock_fd, encoded_data, encoded_len);
+            printf("  SUCCESS: DOWNLOAD %s for %s (%zu bytes)\n", task.filename, task.username, file_size);
+            
+        } else if (task.cmd == DELETE) {
+            create_user_dir(task.username);
+            
+            // Delete from disk
+            if (delete_file(task.username, task.filename) != 0) {
+                write(task.sock_fd, "*** Error: File not found\n", 27);
+                continue;
+            }
+            
+            // Update metadata
+            metadata_remove_file(meta, task.username, task.filename);
+            write(task.sock_fd, "DELETE_SUCCESS\n", 15);
+            printf("  SUCCESS: DELETE %s for %s\n", task.filename, task.username);
+            
+        } else if (task.cmd == LIST) {
+            create_user_dir(task.username);
+            
+            char list_output[2048];
+            metadata_list_files(meta, task.username, list_output, sizeof(list_output));
+            
+            write(task.sock_fd, list_output, strlen(list_output));
+            printf("  SUCCESS: LIST for %s\n", task.username);
+        }
+
+        // Check shutdown flag after task
+        if (shutdown_flag) {
             printf("Worker %d shutting down after task\n", wargs->id);
             return NULL;
         }
     }
+    
     printf("Worker %d exiting\n", wargs->id);
     return NULL;
 }
