@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <signal.h>
+#include <errno.h>
 #include "client_threadpool.h"
 #include "worker.h"
 #include "queue.h"
@@ -26,11 +27,29 @@ void signal_handler(int sig)
     printf("\nReceived signal %d, shutting down...\n", sig);
     fflush(stdout);
     shutdown_flag = 1;
+
     if (server_fd != -1) {
-        close(server_fd);  // unblock accept
+        shutdown(server_fd, SHUT_RDWR); // unblock accept immediately
+        close(server_fd);
         server_fd = -1;
     }
+
+    // Wake up client threads
+    if (global_client_pool) {
+        global_client_pool->stop = 1;
+        pthread_mutex_lock(&global_client_pool->client_queue.lock);
+        pthread_cond_broadcast(&global_client_pool->client_queue.not_empty);
+        pthread_mutex_unlock(&global_client_pool->client_queue.lock);
+    }
+
+    // Wake up worker threads
+    if (global_task_queue) {
+        pthread_mutex_lock(&global_task_queue->lock);
+        pthread_cond_broadcast(&global_task_queue->cond);
+        pthread_mutex_unlock(&global_task_queue->lock);
+    }
 }
+
 
 void* accept_connections(void* arg)
 {
@@ -39,13 +58,20 @@ void* accept_connections(void* arg)
     socklen_t addrlen = sizeof(address);
     int client_fd;
 
+
     while (!shutdown_flag) {
         client_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
         if (client_fd < 0) {
-            if (shutdown_flag) break;
+            if (shutdown_flag && (errno == EBADF || errno == EINTR)) break;
             perror("Accept failed");
             continue;
         }
+
+        if (shutdown_flag) {  // extra safety
+            close(client_fd);
+            break;
+        }
+
         printf("New client connected, socket descriptor: %d\n", client_fd);
         fflush(stdout);
         enqueue_socket(client_pool, client_fd);
@@ -90,12 +116,10 @@ int main()
     printf("Server listening on port %d\n", SERVER_PORT);
     fflush(stdout);
 
-    // Init resources
     global_metadata = metadata_init();
     global_task_queue = queue_init();
     global_client_pool = init_client_threadpool(global_task_queue, global_metadata);
 
-    // Start worker threads
     worker_args_t wargs[WORKER_POOL_SIZE];
     for (int i = 0; i < WORKER_POOL_SIZE; i++) {
         wargs[i].task_queue = global_task_queue;
@@ -104,32 +128,26 @@ int main()
         pthread_create(&worker_threads[i], NULL, worker_func, &wargs[i]);
     }
 
-    // Start accept thread
     pthread_create(&accept_thread, NULL, accept_connections, global_client_pool);
 
     printf("=== Server Ready ===\n");
     fflush(stdout);
 
-    while (!shutdown_flag) sleep(1);
+    pthread_join(accept_thread, NULL);
 
     printf("Shutting down server...\n");
     fflush(stdout);
 
-    // Stop client threads
     cleanup_client_threadpool(global_client_pool);
     global_client_pool = NULL;
 
-    // Wake up worker threads
     pthread_mutex_lock(&global_task_queue->lock);
     pthread_cond_broadcast(&global_task_queue->cond);
     pthread_mutex_unlock(&global_task_queue->lock);
 
-    // Join threads
-    pthread_join(accept_thread, NULL);
     for (int i = 0; i < WORKER_POOL_SIZE; i++)
         pthread_join(worker_threads[i], NULL);
 
-    // Clean up
     queue_destroy(global_task_queue);
     metadata_destroy(global_metadata);
 
