@@ -18,6 +18,8 @@
 typedef struct {
     char filename[256];
     size_t size; 
+    pthread_mutex_t file_lock; // so that multiple users wont update or delete file at a time (avoiding race condition)
+    int locked; // traking if locked is initialized 
 } file_t;
 
 typedef struct {
@@ -46,5 +48,8 @@ int metadata_add_file(metadata_t* m, const char* username, const char* filename,
 int metadata_remove_file(metadata_t* m, const char* username, const char* filename);
 void metadata_list_files(metadata_t* m, const char* username, char* output, size_t out_size);
 int metadata_check_quota(metadata_t* m, const char* username, size_t add_size);  // 1=ok, 0=over
+file_t* metadata_get_and_lock_file(metadata_t* m, const char* username, const char* filename);
+void metadata_unlock_file(file_t* f);
 
-#endif
+
+#endifs
