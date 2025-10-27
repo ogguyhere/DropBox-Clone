@@ -1,5 +1,7 @@
 #include "queue.h"
 #include <stdlib.h>
+#include <signal.h>  // For sig_atomic_t
+#include <stdatomic.h>
 
 queue_t *queue_init() {
     queue_t *q = malloc(sizeof(queue_t));
@@ -41,7 +43,7 @@ int queue_enqueue(queue_t *q, task_t *task) {
     return 0;
 }
 
-int queue_dequeue(queue_t *q, task_t **task, volatile int *stop_flag) {
+int queue_dequeue(queue_t *q, task_t **task, _Atomic int *stop_flag) {
     pthread_mutex_lock(&q->lock);
     while (q->size == 0 && !(*stop_flag)) {
         pthread_cond_wait(&q->cond, &q->lock);

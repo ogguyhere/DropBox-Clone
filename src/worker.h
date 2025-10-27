@@ -13,6 +13,8 @@
 #include "queue.h"
 #include "metadata.h"
 #include <pthread.h>
+#include <stdatomic.h>
+// #include <signal.h>  // For sig_atomic_t
 
 typedef struct {
     queue_t* task_queue;
@@ -21,7 +23,7 @@ typedef struct {
 } worker_args_t;
 
 // Global shutdown flag
-extern volatile int shutdown_flag;
+extern _Atomic int shutdown_flag;
 
 // Functions
 void* worker_func(void* args);

@@ -21,6 +21,6 @@ typedef struct {
 queue_t *queue_init();
 void queue_destroy(queue_t *q);
 int queue_enqueue(queue_t *q, task_t *task);
-int queue_dequeue(queue_t *q, task_t **task, volatile int *stop_flag); // stop_flag support
+int queue_dequeue(queue_t *q, task_t **task,_Atomic int *stop_flag); // stop_flag support
 
 #endif

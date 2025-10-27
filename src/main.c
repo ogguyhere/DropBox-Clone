@@ -10,6 +10,7 @@
 #include "worker.h"
 #include "queue.h"
 #include "metadata.h"
+#include <stdatomic.h>
 
 #define WORKER_POOL_SIZE 3
 #define SERVER_PORT 8080
@@ -20,54 +21,76 @@ metadata_t *global_metadata = NULL;
 pthread_t worker_threads[WORKER_POOL_SIZE];
 pthread_t accept_thread;
 int server_fd = -1;
-volatile sig_atomic_t shutdown_flag = 0;
 
+_Atomic int shutdown_flag = 0;
+// volatile sig_atomic_t shutdown_flag = 0;
+// volatile int shutdown_flag = 0;  // Consistent with worker.h extern
+
+// void signal_handler(int sig)
+// {
+//     printf("\nReceived signal %d, shutting down...\n", sig);
+//     fflush(stdout);
+//     shutdown_flag = 1;
+
+//     if (server_fd != -1) {
+//         shutdown(server_fd, SHUT_RDWR); // unblock accept immediately
+//         close(server_fd);
+//         server_fd = -1;
+//     }
+
+//     // Wake up client threads
+//     if (global_client_pool) {
+//         global_client_pool->stop = 1;
+//         pthread_mutex_lock(&global_client_pool->client_queue.lock);
+//         pthread_cond_broadcast(&global_client_pool->client_queue.not_empty);
+//         pthread_mutex_unlock(&global_client_pool->client_queue.lock);
+//     }
+
+//     // Wake up worker threads
+//     if (global_task_queue) {
+//         pthread_mutex_lock(&global_task_queue->lock);
+//         pthread_cond_broadcast(&global_task_queue->cond);
+//         pthread_mutex_unlock(&global_task_queue->lock);
+//     }
+// }
+
+// fix: Signal-safe shutdown - minimal work in handler
 void signal_handler(int sig)
 {
-    printf("\nReceived signal %d, shutting down...\n", sig);
-    fflush(stdout);
+    // Only set the flag - don't call printf (not signal-safe)
+    // Don't access any shared data structures
     shutdown_flag = 1;
 
-    if (server_fd != -1) {
-        shutdown(server_fd, SHUT_RDWR); // unblock accept immediately
-        close(server_fd);
-        server_fd = -1;
-    }
-
-    // Wake up client threads
-    if (global_client_pool) {
-        global_client_pool->stop = 1;
-        pthread_mutex_lock(&global_client_pool->client_queue.lock);
-        pthread_cond_broadcast(&global_client_pool->client_queue.not_empty);
-        pthread_mutex_unlock(&global_client_pool->client_queue.lock);
-    }
-
-    // Wake up worker threads
-    if (global_task_queue) {
-        pthread_mutex_lock(&global_task_queue->lock);
-        pthread_cond_broadcast(&global_task_queue->cond);
-        pthread_mutex_unlock(&global_task_queue->lock);
-    }
+    // Write is atomic and signal-safe
+    const char msg[] = "\nShutdown signal received...\n";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
 }
 
-
-void* accept_connections(void* arg)
+void *accept_connections(void *arg)
 {
     client_threadpool_t *client_pool = (client_threadpool_t *)arg;
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     int client_fd;
+    int local_server_fd;
 
-
-    while (!shutdown_flag) {
-        client_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-        if (client_fd < 0) {
-            if (shutdown_flag && (errno == EBADF || errno == EINTR)) break;
+    while (1)
+    {
+        // fix: Read server_fd once to avoid race
+        local_server_fd = server_fd;
+        if (local_server_fd < 0 || shutdown_flag)
+            break;
+        client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+        if (client_fd < 0)
+        {
+            if (shutdown_flag && (errno == EBADF || errno == EINTR))
+                break;
             perror("Accept failed");
             continue;
         }
-
-        if (shutdown_flag) {  // extra safety
+        // Check shutdown again after blocking accept
+        if (shutdown_flag)
+        {
             close(client_fd);
             break;
         }
@@ -90,7 +113,8 @@ int main()
     printf("=== Dropbox Clone Server Starting ===\n");
     fflush(stdout);
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
@@ -103,12 +127,14 @@ int main()
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(SERVER_PORT);
 
-    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
         perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
-    if (listen(server_fd, 10) < 0) {
+    if (listen(server_fd, 10) < 0)
+    {
         perror("Listen failed");
         exit(EXIT_FAILURE);
     }
@@ -121,7 +147,8 @@ int main()
     global_client_pool = init_client_threadpool(global_task_queue, global_metadata);
 
     worker_args_t wargs[WORKER_POOL_SIZE];
-    for (int i = 0; i < WORKER_POOL_SIZE; i++) {
+    for (int i = 0; i < WORKER_POOL_SIZE; i++)
+    {
         wargs[i].task_queue = global_task_queue;
         wargs[i].metadata = global_metadata;
         wargs[i].id = i + 1;
@@ -138,16 +165,40 @@ int main()
     printf("Shutting down server...\n");
     fflush(stdout);
 
+    // fix: Close server socket to unblock any pending accepts
+    if (server_fd >= 0)
+    {
+        shutdown(server_fd, SHUT_RDWR);
+        close(server_fd);
+        server_fd = -1;
+    }
+
+    // fix: Signal client threads to stop (with proper locking)
+    if (global_client_pool)
+    {
+        pthread_mutex_lock(&global_client_pool->client_queue.lock);
+        global_client_pool->stop = 1;
+        pthread_cond_broadcast(&global_client_pool->client_queue.not_empty);
+        pthread_mutex_unlock(&global_client_pool->client_queue.lock);
+    }
+
+    // wait for client threads to finish
     cleanup_client_threadpool(global_client_pool);
     global_client_pool = NULL;
 
-    pthread_mutex_lock(&global_task_queue->lock);
-    pthread_cond_broadcast(&global_task_queue->cond);
-    pthread_mutex_unlock(&global_task_queue->lock);
+    // fix: Signal worker threads to stop (with proper locking)
+    if (global_task_queue)
+    {
+        pthread_mutex_lock(&global_task_queue->lock);
+        pthread_cond_broadcast(&global_task_queue->cond);
+        pthread_mutex_unlock(&global_task_queue->lock);
+    }
 
+    // wait for all worker threads 
     for (int i = 0; i < WORKER_POOL_SIZE; i++)
         pthread_join(worker_threads[i], NULL);
 
+    // cleanup resources 
     queue_destroy(global_task_queue);
     metadata_destroy(global_metadata);
 
