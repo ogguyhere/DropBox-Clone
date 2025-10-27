@@ -20,7 +20,8 @@ metadata_t *global_metadata = NULL;
 pthread_t worker_threads[WORKER_POOL_SIZE];
 pthread_t accept_thread;
 int server_fd = -1;
-volatile sig_atomic_t shutdown_flag = 0;
+// volatile sig_atomic_t shutdown_flag = 0;
+volatile int shutdown_flag = 0;  // Consistent with worker.h extern
 
 void signal_handler(int sig)
 {
