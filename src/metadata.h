@@ -52,4 +52,4 @@ file_t* metadata_get_and_lock_file(metadata_t* m, const char* username, const ch
 void metadata_unlock_file(file_t* f);
 
 
-#endifs
+#endif
