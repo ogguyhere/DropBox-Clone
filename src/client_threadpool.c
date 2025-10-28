@@ -42,7 +42,7 @@ static void *client_worker(void *arg) {
         int client_sock = dequeue(&pool->client_queue, &pool->stop);
         if (client_sock <= 0) break;
         handle_client(client_sock, pool->task_queue, pool->metadata);
-        close(client_sock);
+        // Socket already closed in handle_client
     }
     return NULL;
 }

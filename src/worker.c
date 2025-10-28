@@ -84,10 +84,11 @@ void *worker_func(void *args)
 
         if (!task) continue;
 
-        printf("  Worker %d: Processing %s for %s\n", wargs->id, 
-               (task->cmd == UPLOAD ? "UPLOAD" : 
-                task->cmd == DOWNLOAD ? "DOWNLOAD" : 
-                task->cmd == DELETE ? "DELETE" : "LIST"), task->username);
+        printf("  Worker %d: Processing %s for %s (priority=%d)\n", wargs->id, 
+       (task->cmd == UPLOAD ? "UPLOAD" : 
+        task->cmd == DOWNLOAD ? "DOWNLOAD" : 
+        task->cmd == DELETE ? "DELETE" : "LIST"), 
+       task->username, task->priority);
 
         task->result = -1;  // Assume fail
 

@@ -1,4 +1,5 @@
 *.o
+*.log
 src/*.o
 obj/* 
 .vscode
