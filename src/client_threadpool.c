@@ -20,7 +20,7 @@ static void enqueue(client_queue_t *q, int client_sock) {
     pthread_mutex_unlock(&q->lock);
 }
 
-static int dequeue(client_queue_t *q, volatile int *stop_flag) {
+static int dequeue(client_queue_t *q, _Atomic int *stop_flag) {
     pthread_mutex_lock(&q->lock);
     while (q->count == 0 && !(*stop_flag)) {
         pthread_cond_wait(&q->not_empty, &q->lock);

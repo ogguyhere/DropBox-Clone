@@ -61,6 +61,14 @@ void signal_handler(int sig)
     // Don't access any shared data structures
     shutdown_flag = 1;
 
+    // SHUTDOWN BUG FIXED 
+    if (server_fd != -1) {
+        shutdown(server_fd, SHUT_RDWR);  // Unblock any pending accept (optional but good)
+        close(server_fd);
+        server_fd = -1;
+    }
+
+    
     // Write is atomic and signal-safe
     const char msg[] = "\nShutdown signal received...\n";
     write(STDERR_FILENO, msg, sizeof(msg) - 1);

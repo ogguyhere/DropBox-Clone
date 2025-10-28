@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include "queue.h"
 #include "metadata.h"
+#include <stdatomic.h>
 
 #define MAX_CLIENT_QUEUE 100
 
@@ -18,7 +19,7 @@ typedef struct {
     client_queue_t client_queue;
     pthread_t *threads;
     int num_threads;
-    int stop;
+    _Atomic int stop;
 
 
     queue_t *task_queue;     
