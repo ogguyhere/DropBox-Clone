@@ -20,7 +20,7 @@ queue_t *global_task_queue = NULL;
 metadata_t *global_metadata = NULL;
 pthread_t worker_threads[WORKER_POOL_SIZE];
 pthread_t accept_thread;
-int server_fd = -1;
+_Atomic server_fd = -1;
 
 _Atomic int shutdown_flag = 0;
 // volatile sig_atomic_t shutdown_flag = 0;
@@ -61,14 +61,15 @@ void signal_handler(int sig)
     // Don't access any shared data structures
     shutdown_flag = 1;
 
-    // SHUTDOWN BUG FIXED 
-    if (server_fd != -1) {
-        shutdown(server_fd, SHUT_RDWR);  // Unblock any pending accept (optional but good)
-        close(server_fd);
-        server_fd = -1;
+    // SHUTDOWN BUG FIXED
+    int fd = atomic_load(&server_fd);
+    if (fd != -1)
+    {
+        shutdown(fd, SHUT_RDWR); // Unblock any pending accept (optional but good)
+        close(fd);
+        atomic_store(&server_fd, -1);
     }
 
-    
     // Write is atomic and signal-safe
     const char msg[] = "\nShutdown signal received...\n";
     write(STDERR_FILENO, msg, sizeof(msg) - 1);
@@ -80,14 +81,15 @@ void *accept_connections(void *arg)
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     int client_fd;
-    int local_server_fd;
 
     while (1)
     {
         // fix: Read server_fd once to avoid race
-        local_server_fd = server_fd;
+        int local_server_fd = atomic_load(&server_fd); // atomic read
         if (local_server_fd < 0 || shutdown_flag)
             break;
+
+        // (still racy if closed mid-call, but that's OK)
         client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
         if (client_fd < 0)
         {
@@ -174,11 +176,14 @@ int main()
     fflush(stdout);
 
     // fix: Close server socket to unblock any pending accepts
-    if (server_fd >= 0)
+
+    // Atomic close
+    int fd = atomic_load(&server_fd);
+    if (fd >= 0)
     {
-        shutdown(server_fd, SHUT_RDWR);
-        close(server_fd);
-        server_fd = -1;
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+        atomic_store(&server_fd, -1);
     }
 
     // fix: Signal client threads to stop (with proper locking)
@@ -202,11 +207,11 @@ int main()
         pthread_mutex_unlock(&global_task_queue->lock);
     }
 
-    // wait for all worker threads 
+    // wait for all worker threads
     for (int i = 0; i < WORKER_POOL_SIZE; i++)
         pthread_join(worker_threads[i], NULL);
 
-    // cleanup resources 
+    // cleanup resources
     queue_destroy(global_task_queue);
     metadata_destroy(global_metadata);
 
