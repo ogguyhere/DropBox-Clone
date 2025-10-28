@@ -12,10 +12,10 @@ echo "Working dir: $PWD"
 
 # Clean build
 echo "Cleaning previous build..."
-make -f make_merged clean > /dev/null 2>&1 || true
+make clean > /dev/null 2>&1 || true
 
 echo "Building server with debug symbols..."
-if make -f make_merged CFLAGS="-g -O0 -pthread -I src" \
+if make CFLAGS="-g -O0 -pthread -I src" \
    LDFLAGS="-pthread -lm -ldl" all > build.log 2>&1; then
     echo "✅ Build successful"
 else
