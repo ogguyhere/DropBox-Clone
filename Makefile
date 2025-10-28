@@ -1,24 +1,86 @@
-# dropbox-clone/Makefile
+# Makefile - Unified Dropbox Clone Build System
+
 CC = gcc
-CFLAGS = -Wall -g -pthread
+CFLAGS = -Wall -Wno-unused-function -g -pthread -I$(SRC_DIR)
+
 
 SRC_DIR = src
+TEST_DIR = tests
+
 TARGET = server
 CLIENT = client
-TEST = test_queue
+FILE_CLIENT = client_file_testing
+QUEUE_TEST = test_queue
 
-all: $(TARGET) $(CLIENT) $(TEST)
+# Source files
+SERVER_SRCS = $(SRC_DIR)/main.c $(SRC_DIR)/client_threadpool.c $(SRC_DIR)/commands.c \
+              $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c $(SRC_DIR)/metadata.c $(SRC_DIR)/file_io.c
 
-$(TARGET): $(SRC_DIR)/main.c
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC_DIR)/main.c
+CLIENT_SRCS = $(TEST_DIR)/client.c
+FILE_CLIENT_SRCS = $(TEST_DIR)/client_file_testing.c
+QUEUE_TEST_SRCS = $(TEST_DIR)/test_queue.c $(SRC_DIR)/queue.c
 
-$(CLIENT): $(SRC_DIR)/client.c
-	$(CC) $(CFLAGS) -o $(CLIENT) $(SRC_DIR)/client.c
+# Build all targets
+all: $(TARGET) $(CLIENT) $(FILE_CLIENT)
 
-$(TEST): $(SRC_DIR)/test_queue.c $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c
-	$(CC) $(CFLAGS) -o $(TEST) $(SRC_DIR)/test_queue.c $(SRC_DIR)/queue.c $(SRC_DIR)/worker.c $(SRC_DIR)/metadata.c $(SRC_DIR)/file_io.c -lpthread
+# -------------------
+# Server executable
+# -------------------
+$(TARGET): $(SERVER_SRCS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SERVER_SRCS)
+	@echo "[+] Server compiled successfully"
 
+# -------------------
+# Simple client
+# -------------------
+$(CLIENT): $(CLIENT_SRCS)
+	$(CC) $(CFLAGS) -o $(CLIENT) $(CLIENT_SRCS)
+	@echo "[+] Client compiled successfully"
+
+# -------------------
+# File testing client
+# -------------------
+$(FILE_CLIENT): $(FILE_CLIENT_SRCS)
+	$(CC) $(CFLAGS) -o $(FILE_CLIENT) $(FILE_CLIENT_SRCS)
+	@echo "[+] File testing client compiled successfully"
+
+# -------------------
+# Queue test build
+# -------------------
+$(QUEUE_TEST): $(QUEUE_TEST_SRCS)
+	$(CC) $(CFLAGS) -o $(QUEUE_TEST) $(QUEUE_TEST_SRCS)
+	@echo "[+] Queue test compiled successfully"
+
+# Run queue test
+run_queue_test: $(QUEUE_TEST)
+	./$(QUEUE_TEST)
+	@echo "[+] Queue test finished"
+
+# -------------------
+# Clean build artifacts
+# -------------------
 clean:
-	rm -f $(TARGET) $(CLIENT) $(TEST)
+	rm -f $(TARGET) $(CLIENT) $(FILE_CLIENT) $(QUEUE_TEST) *.o *~
+	rm -rf storage/
+	@echo "[+] Clean complete"
 
-.PHONY: all clean
+# -------------------
+# Run server
+# -------------------
+run: $(TARGET)
+	./$(TARGET)
+
+# -------------------
+# Memory leak detection with Valgrind
+# -------------------
+valgrind: $(TARGET)
+	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./$(TARGET)
+
+# -------------------
+# Thread race detection with ThreadSanitizer
+# -------------------
+tsan: clean
+	$(CC) $(CFLAGS) -fsanitize=thread -o $(TARGET) $(SERVER_SRCS)
+	./$(TARGET)
+
+.PHONY: all clean run valgrind tsan run_queue_test
