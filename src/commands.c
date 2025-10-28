@@ -333,52 +333,131 @@ static void handle_list(int sockfd, ClientSession *session, queue_t *task_queue,
 // ========================================================
 // Dispatcher
 // ========================================================
+// void handle_commands(int sockfd, const char *buffer, ClientSession *session,
+//                      queue_t *task_queue, metadata_t *metadata)
+// {
+//     char command[10], arg1[50], arg2[50];
+//     int args = sscanf(buffer, "%9s %49s %49s", command, arg1, arg2);
+
+//     if (args < 1)
+//     {
+//         send_response(sockfd, "*** Invalid command\n");
+//         return;
+//     }
+
+//     if (strcmp(command, "signup") == 0)
+//     {
+//         handle_signup(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
+//     }
+//     else if (strcmp(command, "login") == 0)
+//     {
+//         handle_login(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
+//     }
+//     else if (strcmp(command, "logout") == 0)
+//     {
+//         handle_logout(sockfd, session);
+//     }
+//     else if (strcmp(command, "UPLOAD") == 0)
+//     {
+//         handle_upload(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
+//     }
+//     else if (strcmp(command, "DOWNLOAD") == 0)
+//     {
+//         handle_download(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
+//     }
+//     else if (strcmp(command, "DELETE") == 0)
+//     {
+//         handle_delete(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
+//     }
+//     else if (strcmp(command, "LIST") == 0)
+//     {
+//         handle_list(sockfd, session, task_queue,metadata);
+//     }
+//     else
+//     {
+//         send_response(sockfd, "*** Unknown command\n");
+//     }
+// }
+
 void handle_commands(int sockfd, const char *buffer, ClientSession *session,
                      queue_t *task_queue, metadata_t *metadata)
 {
-    char command[10], arg1[50], arg2[50];
-    int args = sscanf(buffer, "%9s %49s %49s", command, arg1, arg2);
+    // Copy buffer (strtok modifies it)
+    char cmd_buffer[1024];
+    strncpy(cmd_buffer, buffer, sizeof(cmd_buffer) - 1);
+    cmd_buffer[sizeof(cmd_buffer) - 1] = '\0';
 
-    if (args < 1)
+    char *line = strtok(cmd_buffer, "\n");
+    while (line != NULL)
     {
-        send_response(sockfd, "*** Invalid command\n");
-        return;
-    }
+        // Trim trailing whitespace/newline
+        char *end = line + strlen(line) - 1;
+        while (end > line && (*end == '\r' || *end == '\n' || *end == ' ' || *end == '\t'))
+            *end-- = '\0';
 
-    if (strcmp(command, "signup") == 0)
-    {
-        handle_signup(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
-    }
-    else if (strcmp(command, "login") == 0)
-    {
-        handle_login(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
-    }
-    else if (strcmp(command, "logout") == 0)
-    {
-        handle_logout(sockfd, session);
-    }
-    else if (strcmp(command, "UPLOAD") == 0)
-    {
-        handle_upload(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
-    }
-    else if (strcmp(command, "DOWNLOAD") == 0)
-    {
-        handle_download(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
-    }
-    else if (strcmp(command, "DELETE") == 0)
-    {
-        handle_delete(sockfd, args >= 2 ? arg1 : NULL, session, task_queue,metadata);
-    }
-    else if (strcmp(command, "LIST") == 0)
-    {
-        handle_list(sockfd, session, task_queue,metadata);
-    }
-    else
-    {
-        send_response(sockfd, "*** Unknown command\n");
+        if (strlen(line) == 0)
+        {
+            line = strtok(NULL, "\n");
+            continue;
+        }
+
+        printf("Received line: '%s'\n", line); // Debug—remove after
+
+        char command[10], arg1[50], arg2[50];
+        int args = sscanf(line, "%9s %49s %49s", command, arg1, arg2);
+
+        if (args < 1)
+        {
+            send_response(sockfd, "*** Invalid command\n");
+            fflush(stdout); // Flush response
+            line = strtok(NULL, "\n");
+            continue;
+        }
+
+        if (strcmp(command, "signup") == 0)
+        {
+            handle_signup(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
+            fflush(stdout); // Flush after auth
+        }
+        else if (strcmp(command, "login") == 0)
+        {
+            handle_login(sockfd, args >= 2 ? arg1 : NULL, args == 3 ? arg2 : NULL, session, metadata);
+            fflush(stdout);
+        }
+        else if (strcmp(command, "logout") == 0)
+        {
+            handle_logout(sockfd, session);
+            fflush(stdout);
+        }
+        else if (strcmp(command, "UPLOAD") == 0)
+        {
+            handle_upload(sockfd, args >= 2 ? arg1 : NULL, session, task_queue, metadata);
+            fflush(stdout);
+        }
+        else if (strcmp(command, "DOWNLOAD") == 0)
+        {
+            handle_download(sockfd, args >= 2 ? arg1 : NULL, session, task_queue, metadata);
+            fflush(stdout);
+        }
+        else if (strcmp(command, "DELETE") == 0)
+        {
+            handle_delete(sockfd, args >= 2 ? arg1 : NULL, session, task_queue, metadata);
+            fflush(stdout);
+        }
+        else if (strcmp(command, "LIST") == 0)
+        {
+            handle_list(sockfd, session, task_queue, metadata);
+            fflush(stdout);
+        }
+        else
+        {
+            send_response(sockfd, "*** Unknown command\n");
+            fflush(stdout);
+        }
+
+        line = strtok(NULL, "\n");
     }
 }
-
 void handle_client(int client_sock, queue_t *task_queue, metadata_t *metadata)
 {
     ClientSession session = {0};
@@ -395,3 +474,17 @@ void handle_client(int client_sock, queue_t *task_queue, metadata_t *metadata)
 
     close(client_sock);
 }
+
+// multi cmd per onnection
+// void handle_client(int client_sock, queue_t *task_queue, metadata_t *metadata) {
+//     ClientSession session = {0};
+//     char buffer[1024];
+//     int n;
+
+//     while ((n = read(client_sock, buffer, sizeof(buffer)-1)) > 0) {  // Loop until disconnect
+//         buffer[n] = '\0';
+//         handle_commands(client_sock, buffer, &session, task_queue, metadata);
+//     }
+
+//     close(client_sock);
+// }
