@@ -26,12 +26,17 @@ typedef struct {
     size_t file_size;     // e.g 1024 bytes (0 if no upload)
     int sock_fd;          // Client socket for results
     char data[8192];      // For file content (base64 encoded)
+    
 
     // --- Phase 2 additions (for proper synchronization) ---
+    // Completion Signaling 
     pthread_mutex_t lock;       // Protects access to 'done' and 'result'
     pthread_cond_t  completed;  // Signals client thread when done
     int done;                   // 1 = task complete
     int result;                 // 0 = success, -1 = fail
+
+    // BONUS ---- Priority System Implementation ----
+    int priority; // (0=low, 1=normal, 2=high, 3=admin)
     
 } task_t; 
 

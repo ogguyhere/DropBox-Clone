@@ -66,6 +66,21 @@ int metadata_add_user(metadata_t *m, const char *username, const char *password)
     u->num_files = 0;
     u->quota_used = 0;
     u->quota_max = DEFAULT_QUOTA;
+
+    // BONUS ---- Priority System Implementation ----
+    if (strncmp(username, "admin_", 6) == 0)
+    {
+        u->priority = 3; // admin users
+    }
+    else if (strncmp(username, "vip_", 4) == 0)
+    {
+        u->priority = 2; // VIP users
+    }
+    else
+    {
+        u->priority = 1; // normal users
+    }
+
     m->num_users++;
 
     pthread_mutex_unlock(&m->meta_lock);
@@ -126,44 +141,50 @@ int metadata_check_quota(metadata_t *m, const char *username, size_t add_size)
 }
 
 // Add file
-int metadata_add_file(metadata_t *m, const char *username, const char *filename, size_t size) {
+int metadata_add_file(metadata_t *m, const char *username, const char *filename, size_t size)
+{
     user_t *u;
     if (metadata_get_user(m, username, &u) != 0)
         return -1;
 
-    pthread_mutex_lock(&u->user_lock);   // Per-user lock
+    pthread_mutex_lock(&u->user_lock); // Per-user lock
 
     size_t old_size = 0;
     // Check if file already exists
-    for (int i = 0; i < u->num_files; i++) {
-        if (strcmp(u->files[i].filename, filename) == 0) {
+    for (int i = 0; i < u->num_files; i++)
+    {
+        if (strcmp(u->files[i].filename, filename) == 0)
+        {
             old_size = u->files[i].size;
-            if (u->quota_used - old_size + size > u->quota_max) {  // Check delta
+            if (u->quota_used - old_size + size > u->quota_max)
+            { // Check delta
                 pthread_mutex_unlock(&u->user_lock);
-                return -2;  // Would exceed quota
+                return -2; // Would exceed quota
             }
             // Lock file for update (per-design)
             pthread_mutex_lock(&u->files[i].file_lock);
             u->quota_used = u->quota_used - old_size + size;
             u->files[i].size = size;
-            pthread_mutex_unlock(&u->files[i].file_lock);  // Quick unlock
+            pthread_mutex_unlock(&u->files[i].file_lock); // Quick unlock
             pthread_mutex_unlock(&u->user_lock);
             return 0;
         }
     }
 
-    if (u->num_files >= MAX_FILES_PER_USER) {
+    if (u->num_files >= MAX_FILES_PER_USER)
+    {
         pthread_mutex_unlock(&u->user_lock);
         return -1;
     }
 
-    if (u->quota_used + size > u->quota_max) {
+    if (u->quota_used + size > u->quota_max)
+    {
         pthread_mutex_unlock(&u->user_lock);
-        return -2;  // Quota exceeded
+        return -2; // Quota exceeded
     }
 
     file_t *f = &u->files[u->num_files];
-    strncpy(f->filename, filename, sizeof(f->filename) - 1);  // Safer
+    strncpy(f->filename, filename, sizeof(f->filename) - 1); // Safer
     f->filename[sizeof(f->filename) - 1] = '\0';
     f->size = size;
 
@@ -187,7 +208,7 @@ int metadata_remove_file(metadata_t *m, const char *username, const char *filena
 
     pthread_mutex_lock(&u->user_lock);
 
-    // find and remove 
+    // find and remove
     for (int i = 0; i < u->num_files; i++)
     {
         if (strcmp(u->files[i].filename, filename) == 0)
@@ -195,9 +216,9 @@ int metadata_remove_file(metadata_t *m, const char *username, const char *filena
             // atmomic : subtract quota *before* shitf or destroy
             u->quota_used -= u->files[i].size;
 
-            
-            if (u->files[i].locked) {
-                pthread_mutex_destroy(&u->files[i].file_lock);//Destroy file lock before removal
+            if (u->files[i].locked)
+            {
+                pthread_mutex_destroy(&u->files[i].file_lock); // Destroy file lock before removal
                 u->files[i].locked = 0;
             }
 
@@ -208,7 +229,7 @@ int metadata_remove_file(metadata_t *m, const char *username, const char *filena
             }
             u->num_files--;
             pthread_mutex_unlock(&u->user_lock);
-            return 0; // fatehhh 
+            return 0; // fatehhh
         }
     }
 
@@ -249,28 +270,34 @@ void metadata_list_files(metadata_t *m, const char *username, char *output, size
 
 // Returns pointer to file if found, NULL otherwise
 // Locks the file's mutex if found
-file_t* metadata_get_and_lock_file(metadata_t* m, const char* username, const char* filename) {
-    user_t* u;
-    if (metadata_get_user(m, username, &u) != 0) return NULL;
-    
+file_t *metadata_get_and_lock_file(metadata_t *m, const char *username, const char *filename)
+{
+    user_t *u;
+    if (metadata_get_user(m, username, &u) != 0)
+        return NULL;
+
     pthread_mutex_lock(&u->user_lock);
-    
-    for (int i = 0; i < u->num_files; i++) {
-        if (strcmp(u->files[i].filename, filename) == 0) {
-            file_t* f = &u->files[i];
-            pthread_mutex_lock(&f->file_lock);  // Lock the file
+
+    for (int i = 0; i < u->num_files; i++)
+    {
+        if (strcmp(u->files[i].filename, filename) == 0)
+        {
+            file_t *f = &u->files[i];
+            pthread_mutex_lock(&f->file_lock); // Lock the file
             pthread_mutex_unlock(&u->user_lock);
             return f;
         }
     }
-    
+
     pthread_mutex_unlock(&u->user_lock);
-    return NULL;  // File not found
+    return NULL; // File not found
 }
 
 // ADD THIS to unlock a file
-void metadata_unlock_file(file_t* f) {
-    if (f) {
+void metadata_unlock_file(file_t *f)
+{
+    if (f)
+    {
         pthread_mutex_unlock(&f->file_lock);
     }
 }
